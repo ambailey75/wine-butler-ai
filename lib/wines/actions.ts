@@ -70,6 +70,71 @@ export async function updateWine(
   return { id }
 }
 
+export interface WineSuggestion {
+  producer: string
+  wineName: string
+  vintage: number | null
+  country: string | null
+  region: string | null
+  subRegion: string | null
+  classification: string | null
+  varietal: string | null
+  format: string | null
+}
+
+export async function searchCellarWines(params: {
+  producer?: string
+  wineName?: string
+}): Promise<WineSuggestion[]> {
+  const user = await getCurrentUser()
+  if (!user) throw new Error('Not authenticated')
+
+  const producer = params.producer?.trim() ?? ''
+  const wineName = params.wineName?.trim() ?? ''
+
+  if (producer.length < 2 && wineName.length < 2) return []
+
+  const conditions = []
+  if (producer.length >= 2) {
+    conditions.push({ producer: { contains: producer, mode: 'insensitive' as const } })
+  }
+  if (wineName.length >= 2) {
+    conditions.push({ wineName: { contains: wineName, mode: 'insensitive' as const } })
+  }
+
+  const wines = await prisma.wine.findMany({
+    where: {
+      userId: user.id,
+      OR: conditions,
+    },
+    select: {
+      producer: true,
+      wineName: true,
+      vintage: true,
+      country: true,
+      region: true,
+      subRegion: true,
+      classification: true,
+      varietal: true,
+      format: true,
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 20,
+  })
+
+  const seen = new Set<string>()
+  const suggestions: WineSuggestion[] = []
+  for (const wine of wines) {
+    const key = `${wine.producer}|${wine.wineName}|${wine.vintage ?? ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    suggestions.push(wine)
+    if (suggestions.length >= 6) break
+  }
+
+  return suggestions
+}
+
 export async function deleteWine(id: string): Promise<void> {
   const user = await getCurrentUser()
   if (!user) throw new Error('Not authenticated')

@@ -7,10 +7,34 @@ import { NavItem } from './NavItem'
 
 const NAV_ITEMS = [
   { href: '/dashboard/cellar', label: 'Cellar', icon: Wine },
-  { href: '/dashboard/import', label: 'Import', icon: Upload, soon: true },
-  { href: '/dashboard/assistant', label: 'Assistant', icon: Sparkles, soon: true },
-  { href: '/dashboard/alerts', label: 'Alerts', icon: Bell, soon: true },
-  { href: '/dashboard/settings', label: 'Settings', icon: Settings, soon: true },
+  {
+    href: '/dashboard/import',
+    label: 'Import',
+    icon: Upload,
+    soon: true,
+    tooltip: 'Upload Excel, PDF invoices, or label photos (Phase 3)',
+  },
+  {
+    href: '/dashboard/assistant',
+    label: 'Assistant',
+    icon: Sparkles,
+    soon: true,
+    tooltip: 'AI sommelier chat for your collection (Phase 4)',
+  },
+  {
+    href: '/dashboard/alerts',
+    label: 'Alerts',
+    icon: Bell,
+    soon: true,
+    tooltip: 'Drink-window notifications (Phase 5)',
+  },
+  {
+    href: '/dashboard/settings',
+    label: 'Settings',
+    icon: Settings,
+    soon: true,
+    tooltip: 'Account and preferences (Phase 6)',
+  },
 ]
 
 export function Sidebar() {

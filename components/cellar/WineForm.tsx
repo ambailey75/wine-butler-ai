@@ -1,10 +1,10 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { format as formatDate } from 'date-fns'
+import { format as formatDate, isValid, parse } from 'date-fns'
 import { Calendar as CalendarIcon, Check, ChevronsUpDown, Plus, X } from 'lucide-react'
 import {
   wineFormSchema,
@@ -13,7 +13,7 @@ import {
 } from '@/lib/wines/schema'
 import { COUNTRIES, WINE_FORMATS, COMMON_REGIONS, COMMON_VARIETALS } from '@/lib/wines/constants'
 import type { SerializedWine } from '@/lib/wines/queries'
-import { createWine, updateWine } from '@/lib/wines/actions'
+import { createWine, updateWine, searchCellarWines, type WineSuggestion } from '@/lib/wines/actions'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -138,6 +138,86 @@ function ComboboxField({ value, onChange, options, placeholder }: ComboboxFieldP
   )
 }
 
+interface PurchaseDateFieldProps {
+  value: Date | undefined
+  onChange: (value: Date | undefined) => void
+}
+
+function PurchaseDateField({ value, onChange }: PurchaseDateFieldProps) {
+  const [open, setOpen] = useState(false)
+  const [textValue, setTextValue] = useState(value ? formatDate(value, 'MM/dd/yyyy') : '')
+
+  useEffect(() => {
+    setTextValue(value ? formatDate(value, 'MM/dd/yyyy') : '')
+  }, [value])
+
+  function handleTextChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const raw = e.target.value
+    setTextValue(raw)
+
+    const trimmed = raw.trim()
+    if (trimmed === '') {
+      onChange(undefined)
+      return
+    }
+
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(trimmed)) {
+      const parsed = parse(trimmed, 'M/d/yyyy', new Date())
+      if (isValid(parsed) && parsed <= new Date()) {
+        onChange(parsed)
+      }
+      return
+    }
+
+    if (/^\d{4}$/.test(trimmed)) {
+      const parsed = new Date(Number(trimmed), 0, 1)
+      if (isValid(parsed) && parsed <= new Date()) {
+        onChange(parsed)
+      }
+    }
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <div className="relative flex items-center">
+        <Input
+          placeholder="MM/DD/YYYY or YYYY"
+          value={textValue}
+          onChange={handleTextChange}
+          className="pr-10"
+        />
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="absolute right-0 h-9 w-9 text-muted-foreground hover:text-foreground"
+          >
+            <CalendarIcon className="h-4 w-4" />
+            <span className="sr-only">Open calendar</span>
+          </Button>
+        </PopoverTrigger>
+      </div>
+      <PopoverContent className="w-auto p-0" align="start">
+        <Calendar
+          mode="single"
+          selected={value}
+          onSelect={(date) => {
+            onChange(date)
+            setOpen(false)
+          }}
+          disabled={(date) => date > new Date()}
+          captionLayout="dropdown"
+          startMonth={new Date(1900, 0)}
+          endMonth={new Date()}
+          defaultMonth={value ?? new Date()}
+          autoFocus
+        />
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 interface WineFormProps {
   mode: 'create' | 'edit'
   wine?: SerializedWine
@@ -195,6 +275,58 @@ export function WineForm({ mode, wine, existingRegions, existingVarietals }: Win
     }
   }
 
+  const [suggestions, setSuggestions] = useState<WineSuggestion[]>([])
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const suggestionsRef = useRef<HTMLDivElement>(null)
+  const producerValue = form.watch('producer')
+  const wineNameValue = form.watch('wineName')
+
+  useEffect(() => {
+    if (mode !== 'create') return
+
+    const producer = producerValue?.trim() ?? ''
+    const wineName = wineNameValue?.trim() ?? ''
+
+    if (producer.length < 2 && wineName.length < 2) {
+      setSuggestions([])
+      setShowSuggestions(false)
+      return
+    }
+
+    const timeout = setTimeout(() => {
+      searchCellarWines({ producer, wineName }).then((results) => {
+        setSuggestions(results)
+        setShowSuggestions(results.length > 0)
+      })
+    }, 350)
+
+    return () => clearTimeout(timeout)
+  }, [producerValue, wineNameValue, mode])
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (suggestionsRef.current && !suggestionsRef.current.contains(event.target as Node)) {
+        setShowSuggestions(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  function applySuggestion(suggestion: WineSuggestion) {
+    form.setValue('producer', suggestion.producer)
+    form.setValue('wineName', suggestion.wineName)
+    if (suggestion.vintage != null) form.setValue('vintage', suggestion.vintage)
+    if (suggestion.country) form.setValue('country', suggestion.country)
+    if (suggestion.region) form.setValue('region', suggestion.region)
+    if (suggestion.subRegion) form.setValue('subRegion', suggestion.subRegion)
+    if (suggestion.classification) form.setValue('classification', suggestion.classification)
+    if (suggestion.varietal) form.setValue('varietal', suggestion.varietal)
+    if (suggestion.format) form.setValue('format', suggestion.format)
+    setShowSuggestions(false)
+    setSuggestions([])
+  }
+
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
@@ -203,32 +335,62 @@ export function WineForm({ mode, wine, existingRegions, existingVarietals }: Win
             <CardTitle className="text-base">Basics</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
-            <FormField
-              control={form.control}
-              name="producer"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Producer *</FormLabel>
-                  <FormControl>
-                    <Input placeholder="e.g. Château Margaux" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
+            <div ref={suggestionsRef} className="relative grid gap-4 sm:col-span-2 sm:grid-cols-2">
+              <FormField
+                control={form.control}
+                name="producer"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Producer *</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g. Château Margaux" autoComplete="off" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="wineName"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Wine Name *</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g. Grand Vin" autoComplete="off" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              {showSuggestions && suggestions.length > 0 && (
+                <div className="absolute left-0 right-0 top-full z-20 mt-1 overflow-hidden rounded-md border border-border bg-popover shadow-md">
+                  <div className="border-b border-border px-3 py-1.5 text-xs font-medium text-muted-foreground">
+                    From your cellar — select to fill in details
+                  </div>
+                  <ul className="max-h-60 overflow-auto">
+                    {suggestions.map((suggestion, index) => (
+                      <li key={index}>
+                        <button
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => applySuggestion(suggestion)}
+                          className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm transition-colors hover:bg-accent"
+                        >
+                          <span className="font-medium">
+                            {suggestion.producer} — {suggestion.wineName}
+                            {suggestion.vintage ? ` (${suggestion.vintage})` : ''}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {[suggestion.region, suggestion.country].filter(Boolean).join(', ') ||
+                              'No region or country on file'}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
-            />
-            <FormField
-              control={form.control}
-              name="wineName"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Wine Name *</FormLabel>
-                  <FormControl>
-                    <Input placeholder="e.g. Grand Vin" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            </div>
             <FormField
               control={form.control}
               name="vintage"
@@ -440,31 +602,12 @@ export function WineForm({ mode, wine, existingRegions, existingVarietals }: Win
               render={({ field }) => (
                 <FormItem className="flex flex-col">
                   <FormLabel>Purchase Date</FormLabel>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <FormControl>
-                        <Button
-                          variant="outline"
-                          className={cn(
-                            'justify-start text-left font-normal',
-                            !field.value && 'text-muted-foreground'
-                          )}
-                        >
-                          <CalendarIcon className="mr-2 h-4 w-4" />
-                          {field.value ? formatDate(field.value, 'PPP') : 'Pick a date'}
-                        </Button>
-                      </FormControl>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <Calendar
-                        mode="single"
-                        selected={field.value}
-                        onSelect={field.onChange}
-                        disabled={(date) => date > new Date()}
-                        autoFocus
-                      />
-                    </PopoverContent>
-                  </Popover>
+                  <FormControl>
+                    <PurchaseDateField value={field.value} onChange={field.onChange} />
+                  </FormControl>
+                  <FormDescription>
+                    Type MM/DD/YYYY, or just a year (e.g. 2015) for older vintages.
+                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
