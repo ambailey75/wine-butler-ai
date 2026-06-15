@@ -1,20 +1,20 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback, useState, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { useDropzone } from 'react-dropzone'
-import { Loader2, type LucideIcon } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 
 interface UploadCardProps {
   title: string
   description: string
-  icon: LucideIcon
+  icon: ReactNode
   accept: Record<string, string[]>
 }
 
-export function UploadCard({ title, description, icon: Icon, accept }: UploadCardProps) {
+export function UploadCard({ title, description, icon, accept }: UploadCardProps) {
   const router = useRouter()
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -67,11 +67,7 @@ export function UploadCard({ title, description, icon: Icon, accept }: UploadCar
     >
       <input {...getInputProps()} />
       <CardHeader className="items-center">
-        {uploading ? (
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        ) : (
-          <Icon className="h-8 w-8 text-primary" />
-        )}
+        {uploading ? <Loader2 className="h-8 w-8 animate-spin text-primary" /> : icon}
         <CardTitle className="text-base">{title}</CardTitle>
         <CardDescription>{description}</CardDescription>
       </CardHeader>

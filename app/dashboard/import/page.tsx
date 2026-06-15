@@ -33,7 +33,7 @@ export default async function ImportHubPage() {
         <UploadCard
           title="Spreadsheet"
           description="Excel or CSV export of your cellar"
-          icon={FileSpreadsheet}
+          icon={<FileSpreadsheet className="h-8 w-8 text-primary" />}
           accept={{
             'text/csv': ['.csv'],
             'application/vnd.ms-excel': ['.xls'],
@@ -43,13 +43,13 @@ export default async function ImportHubPage() {
         <UploadCard
           title="PDF Invoice"
           description="A wine shop or auction invoice"
-          icon={FileText}
+          icon={<FileText className="h-8 w-8 text-primary" />}
           accept={{ 'application/pdf': ['.pdf'] }}
         />
         <UploadCard
           title="Label Photos"
           description="A photo of a wine label"
-          icon={ImageIcon}
+          icon={<ImageIcon className="h-8 w-8 text-primary" />}
           accept={{
             'image/jpeg': ['.jpg', '.jpeg'],
             'image/png': ['.png'],
