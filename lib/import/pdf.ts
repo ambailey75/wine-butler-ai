@@ -1,3 +1,4 @@
+import './pdf-polyfill'
 import { PDFParse } from 'pdf-parse'
 import { MAX_PDF_PAGES } from './constants'
 
