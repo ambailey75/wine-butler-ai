@@ -12,4 +12,4 @@ if (process.env.NODE_ENV !== 'production') {
   globalForAnthropic.anthropic = anthropic
 }
 
-export const CLAUDE_MODEL = 'claude-sonnet-4-20250514'
+export const CLAUDE_MODEL = 'claude-sonnet-4-6'

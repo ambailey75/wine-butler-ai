@@ -15,7 +15,7 @@ PRD: `C:\Users\amand\ClaudeWorkspace\Projects\OneOff\cellar-ai\CellarAI_PRD_v1.1
 - **Styling:** Tailwind CSS + shadcn/ui (to be installed)
 - **Database:** Supabase (PostgreSQL + Auth + Storage)
 - **ORM:** Prisma
-- **AI:** Anthropic Claude API (`claude-sonnet-4-20250514`)
+- **AI:** Anthropic Claude API (`claude-sonnet-4-6`)
 - **Email:** Resend
 - **Deployment:** Vercel — auto-deploys on push to `main`
 - **Repo:** https://github.com/ambailey75/wine-butler-ai (rename on GitHub — see external steps below)
@@ -95,7 +95,7 @@ Three supported formats — all use Claude API:
 File size limits: 25MB per file, 20 files per batch, 100 PDF pages, 5,000 CSV rows.
 
 ## AI Assistant
-- Model: `claude-sonnet-4-20250514`
+- Model: `claude-sonnet-4-6`
 - Pattern: system prompt includes full cellar inventory as JSON + user preferences
 - Tool use: `get_cellar_inventory`, `get_wine_enrichment`, `search_wine_data`,
   `get_food_pairing`, `get_reorder_suggestions`, `get_cellar_analytics`
