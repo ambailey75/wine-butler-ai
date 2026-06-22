@@ -75,6 +75,17 @@ export async function getDistinctRegionsAndVarietals(
   }
 }
 
+export interface EstimatedValue {
+  perBottle: number | null
+  isApproximate: boolean
+}
+
+export function getEstimatedValue(currentEstValue: number | null, purchasePrice: number | null): EstimatedValue {
+  if (currentEstValue !== null) return { perBottle: currentEstValue, isApproximate: false }
+  if (purchasePrice !== null) return { perBottle: purchasePrice, isApproximate: true }
+  return { perBottle: null, isApproximate: false }
+}
+
 export interface DashboardSummary {
   totalBottles: number
   totalCostBasis: number

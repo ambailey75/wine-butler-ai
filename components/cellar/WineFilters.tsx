@@ -83,10 +83,16 @@ function FacetedFilter({ title, options, selected, onChange }: FacetedFilterProp
   )
 }
 
+const RATING_OPTIONS = [
+  { label: '90+', value: 90 },
+  { label: '92+', value: 92 },
+  { label: '94+', value: 94 },
+  { label: '96+', value: 96 },
+]
+
 export interface WineFilterOptions {
-  countries: string[]
-  regions: string[]
-  varietals: string[]
+  styles: string[]
+  formats: string[]
 }
 
 interface WineFiltersProps {
@@ -95,9 +101,9 @@ interface WineFiltersProps {
 }
 
 export function WineFilters({ table, options }: WineFiltersProps) {
-  const countryFilter = (table.getColumn('country')?.getFilterValue() as string[]) ?? []
-  const regionFilter = (table.getColumn('region')?.getFilterValue() as string[]) ?? []
-  const varietalFilter = (table.getColumn('varietal')?.getFilterValue() as string[]) ?? []
+  const styleFilter = (table.getColumn('style')?.getFilterValue() as string[]) ?? []
+  const formatFilter = (table.getColumn('format')?.getFilterValue() as string[]) ?? []
+  const ratingFilter = table.getColumn('rating')?.getFilterValue() as number | undefined
   const vintageFilter =
     (table.getColumn('vintage')?.getFilterValue() as
       | [number | undefined, number | undefined]
@@ -105,45 +111,69 @@ export function WineFilters({ table, options }: WineFiltersProps) {
   const [vintageMin, vintageMax] = vintageFilter
 
   const hasFilters =
-    countryFilter.length > 0 ||
-    regionFilter.length > 0 ||
-    varietalFilter.length > 0 ||
+    styleFilter.length > 0 ||
+    formatFilter.length > 0 ||
+    ratingFilter !== undefined ||
     vintageMin !== undefined ||
     vintageMax !== undefined
 
   const clearAll = () => {
-    table.getColumn('country')?.setFilterValue(undefined)
-    table.getColumn('region')?.setFilterValue(undefined)
-    table.getColumn('varietal')?.setFilterValue(undefined)
+    table.getColumn('style')?.setFilterValue(undefined)
+    table.getColumn('format')?.setFilterValue(undefined)
+    table.getColumn('rating')?.setFilterValue(undefined)
     table.getColumn('vintage')?.setFilterValue(undefined)
   }
 
   const content = (
     <div className="flex flex-wrap items-center gap-2">
       <FacetedFilter
-        title="Country"
-        options={options.countries}
-        selected={countryFilter}
+        title="Style"
+        options={options.styles}
+        selected={styleFilter}
         onChange={(values) =>
-          table.getColumn('country')?.setFilterValue(values.length ? values : undefined)
+          table.getColumn('style')?.setFilterValue(values.length ? values : undefined)
         }
       />
       <FacetedFilter
-        title="Region"
-        options={options.regions}
-        selected={regionFilter}
+        title="Format"
+        options={options.formats}
+        selected={formatFilter}
         onChange={(values) =>
-          table.getColumn('region')?.setFilterValue(values.length ? values : undefined)
+          table.getColumn('format')?.setFilterValue(values.length ? values : undefined)
         }
       />
-      <FacetedFilter
-        title="Varietal"
-        options={options.varietals}
-        selected={varietalFilter}
-        onChange={(values) =>
-          table.getColumn('varietal')?.setFilterValue(values.length ? values : undefined)
-        }
-      />
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button variant="outline" size="sm" className="justify-between gap-2">
+            Rating
+            {ratingFilter !== undefined && (
+              <Badge variant="secondary" className="rounded-sm px-1 font-normal">
+                {ratingFilter}+
+              </Badge>
+            )}
+            <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-36 p-1" align="start">
+          {RATING_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() =>
+                table.getColumn('rating')?.setFilterValue(
+                  ratingFilter === opt.value ? undefined : opt.value
+                )
+              }
+              className={cn(
+                'flex w-full items-center rounded-sm px-2 py-1.5 text-sm hover:bg-accent',
+                ratingFilter === opt.value && 'bg-accent font-medium'
+              )}
+            >
+              {ratingFilter === opt.value && <Check className="mr-2 h-3 w-3" />}
+              <span className={ratingFilter === opt.value ? '' : 'ml-5'}>{opt.label}</span>
+            </button>
+          ))}
+        </PopoverContent>
+      </Popover>
       <div className="flex items-center gap-2">
         <Label htmlFor="vintage-min" className="text-xs text-muted-foreground">
           Vintage

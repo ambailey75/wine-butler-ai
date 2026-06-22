@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import {
   type Column,
@@ -8,6 +8,7 @@ import {
   type ColumnFiltersState,
   type FilterFn,
   type SortingState,
+  type Updater,
   type VisibilityState,
   flexRender,
   getCoreRowModel,
@@ -16,8 +17,9 @@ import {
   getSortedRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { ArrowUpDown, Eye, MoreHorizontal, Pencil, Trash2 } from 'lucide-react'
+import { ArrowUpDown, Columns3, Eye, MoreHorizontal, Pencil, Trash2 } from 'lucide-react'
 import type { SerializedWine } from '@/lib/wines/queries'
+import { getEstimatedValue } from '@/lib/wines/queries'
 import {
   Table,
   TableBody,
@@ -28,6 +30,7 @@ import {
 } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,8 +39,46 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Pagination } from '@/components/ui/pagination'
-import { WineFilters, type WineFilterOptions } from './WineFilters'
+import { WineFilters } from './WineFilters'
 import { DeleteWineDialog } from './DeleteWineDialog'
+
+const STORAGE_KEY = 'wine-butler-column-visibility'
+
+const TOGGLEABLE_COLUMNS: { id: string; label: string }[] = [
+  { id: 'subRegion', label: 'Sub-Region' },
+  { id: 'state', label: 'State/Province' },
+  { id: 'format', label: 'Format' },
+  { id: 'storageLocation', label: 'Storage Location' },
+  { id: 'notes', label: 'Notes' },
+]
+
+const DEFAULT_VISIBILITY: VisibilityState = {
+  subRegion: false,
+  state: false,
+  style: false,
+  format: false,
+  storageLocation: false,
+  notes: false,
+}
+
+function loadVisibility(): VisibilityState {
+  if (typeof window === 'undefined') return DEFAULT_VISIBILITY
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY)
+    if (stored) return { ...DEFAULT_VISIBILITY, ...JSON.parse(stored) }
+  } catch { /* ignore */ }
+  return DEFAULT_VISIBILITY
+}
+
+function saveVisibility(vis: VisibilityState) {
+  try {
+    const toStore: Record<string, boolean> = {}
+    for (const col of TOGGLEABLE_COLUMNS) {
+      if (vis[col.id] !== undefined) toStore[col.id] = vis[col.id]
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(toStore))
+  } catch { /* ignore */ }
+}
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat('en-US', {
@@ -62,11 +103,19 @@ const vintageRangeFilter: FilterFn<SerializedWine> = (row, columnId, filterValue
   return true
 }
 
+const minRatingFilter: FilterFn<SerializedWine> = (row, _columnId, filterValue) => {
+  const minRating = filterValue as number | undefined
+  if (minRating === undefined) return true
+  const value = row.getValue<number | null>('rating')
+  if (value === null || value === undefined) return false
+  return value >= minRating
+}
+
 const globalSearchFilter: FilterFn<SerializedWine> = (row, _columnId, filterValue) => {
   const search = String(filterValue).toLowerCase().trim()
   if (!search) return true
   const wine = row.original
-  return [wine.producer, wine.wineName, wine.region, wine.vineyard, wine.varietal, wine.vendor, wine.notes]
+  return [wine.producer, wine.wineName, wine.region, wine.country, wine.vineyard, wine.varietal, wine.vendor, wine.notes, wine.storageLocation]
     .filter((value): value is string => typeof value === 'string')
     .some((value) => value.toLowerCase().includes(search))
 }
@@ -133,19 +182,66 @@ function WineRowActions({
   )
 }
 
+function ColumnToggle({
+  visibility,
+  onToggle,
+}: {
+  visibility: VisibilityState
+  onToggle: (id: string, checked: boolean) => void
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="gap-2">
+          <Columns3 className="h-4 w-4" />
+          Columns
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        {TOGGLEABLE_COLUMNS.map((col) => (
+          <label
+            key={col.id}
+            className="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-sm hover:bg-accent"
+          >
+            <Checkbox
+              checked={visibility[col.id] !== false}
+              onCheckedChange={(checked) => onToggle(col.id, checked === true)}
+            />
+            {col.label}
+          </label>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 type CellarView = 'in-cellar' | 'all' | 'consumed'
 
 export function WineTable({ wines }: { wines: SerializedWine[] }) {
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({
-    country: false,
-    vineyard: false,
-    state: false,
-  })
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(DEFAULT_VISIBILITY)
   const [globalFilter, setGlobalFilter] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<SerializedWine | null>(null)
   const [cellarView, setCellarView] = useState<CellarView>('in-cellar')
+
+  useEffect(() => {
+    setColumnVisibility(loadVisibility())
+  }, [])
+
+  const handleVisibilityChange = (updater: Updater<VisibilityState>) => {
+    setColumnVisibility((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater
+      saveVisibility(next)
+      return next
+    })
+  }
+
+  const handleColumnToggle = (id: string, checked: boolean) => {
+    const updated = { ...columnVisibility, [id]: checked }
+    setColumnVisibility(updated)
+    saveVisibility(updated)
+  }
 
   const filteredWines = useMemo(() => {
     if (cellarView === 'all') return wines
@@ -173,15 +269,41 @@ export function WineTable({ wines }: { wines: SerializedWine[] }) {
         filterFn: vintageRangeFilter,
       },
       {
+        accessorKey: 'country',
+        header: ({ column }) => <SortButton column={column} label="Country" />,
+        cell: ({ row }) => row.original.country ?? '—',
+      },
+      {
         accessorKey: 'region',
         header: ({ column }) => <SortButton column={column} label="Region" />,
         cell: ({ row }) => row.original.region ?? '—',
-        filterFn: multiSelectFilter,
+      },
+      {
+        accessorKey: 'subRegion',
+        header: ({ column }) => <SortButton column={column} label="Sub-Region" />,
+        cell: ({ row }) => row.original.subRegion ?? '—',
+      },
+      {
+        accessorKey: 'state',
+        header: ({ column }) => <SortButton column={column} label="State" />,
+        cell: ({ row }) => row.original.state ?? '—',
       },
       {
         accessorKey: 'varietal',
         header: ({ column }) => <SortButton column={column} label="Varietal" />,
         cell: ({ row }) => row.original.varietal ?? '—',
+      },
+      {
+        accessorKey: 'style',
+        header: ({ column }) => <SortButton column={column} label="Style" />,
+        cell: ({ row }) => row.original.style ?? '—',
+        filterFn: multiSelectFilter,
+        enableHiding: false,
+      },
+      {
+        accessorKey: 'format',
+        header: ({ column }) => <SortButton column={column} label="Format" />,
+        cell: ({ row }) => row.original.format ?? '—',
         filterFn: multiSelectFilter,
       },
       {
@@ -199,10 +321,17 @@ export function WineTable({ wines }: { wines: SerializedWine[] }) {
       {
         accessorKey: 'currentEstValue',
         header: ({ column }) => <SortButton column={column} label="Est. Value/Bottle" />,
-        cell: ({ row }) =>
-          row.original.currentEstValue !== null
-            ? formatCurrency(row.original.currentEstValue)
-            : '—',
+        accessorFn: (row) => {
+          const est = getEstimatedValue(row.currentEstValue, row.purchasePrice)
+          return est.perBottle
+        },
+        cell: ({ row }) => {
+          const w = row.original
+          const est = getEstimatedValue(w.currentEstValue, w.purchasePrice)
+          if (est.perBottle === null) return <span className="text-muted-foreground">No data</span>
+          if (est.isApproximate) return <span title="Based on purchase price">≈{formatCurrency(est.perBottle)}</span>
+          return formatCurrency(est.perBottle)
+        },
       },
       {
         id: 'totalCost',
@@ -217,13 +346,40 @@ export function WineTable({ wines }: { wines: SerializedWine[] }) {
       },
       {
         id: 'totalEstValue',
-        accessorFn: (row) =>
-          row.totalValueOverride ?? (row.currentEstValue !== null ? row.currentEstValue * row.quantity : null),
+        accessorFn: (row) => {
+          if (row.totalValueOverride !== null) return row.totalValueOverride
+          const est = getEstimatedValue(row.currentEstValue, row.purchasePrice)
+          return est.perBottle !== null ? est.perBottle * row.quantity : null
+        },
         header: ({ column }) => <SortButton column={column} label="Total Est. Value" />,
         cell: ({ row }) => {
           const w = row.original
-          const val = w.totalValueOverride ?? (w.currentEstValue !== null ? w.currentEstValue * w.quantity : null)
-          return val !== null ? formatCurrency(val) : '—'
+          if (w.totalValueOverride !== null) return formatCurrency(w.totalValueOverride)
+          const est = getEstimatedValue(w.currentEstValue, w.purchasePrice)
+          if (est.perBottle === null) return <span className="text-muted-foreground">No data</span>
+          const total = est.perBottle * w.quantity
+          if (est.isApproximate) return <span title="Based on purchase price">≈{formatCurrency(total)}</span>
+          return formatCurrency(total)
+        },
+      },
+      {
+        accessorKey: 'rating',
+        header: ({ column }) => <SortButton column={column} label="Rating" />,
+        cell: ({ row }) => row.original.rating !== null ? row.original.rating : '—',
+        filterFn: minRatingFilter,
+      },
+      {
+        accessorKey: 'storageLocation',
+        header: ({ column }) => <SortButton column={column} label="Storage Location" />,
+        cell: ({ row }) => row.original.storageLocation ?? '—',
+      },
+      {
+        accessorKey: 'notes',
+        header: 'Notes',
+        cell: ({ row }) => {
+          const notes = row.original.notes
+          if (!notes) return '—'
+          return notes.length > 50 ? `${notes.slice(0, 50)}...` : notes
         },
       },
       {
@@ -237,21 +393,6 @@ export function WineTable({ wines }: { wines: SerializedWine[] }) {
         },
       },
       {
-        accessorKey: 'state',
-        header: ({ column }) => <SortButton column={column} label="State" />,
-        cell: ({ row }) => row.original.state ?? '—',
-      },
-      {
-        accessorKey: 'vineyard',
-        header: ({ column }) => <SortButton column={column} label="Vineyard" />,
-        cell: ({ row }) => row.original.vineyard ?? '—',
-      },
-      {
-        accessorKey: 'country',
-        header: 'Country',
-        filterFn: multiSelectFilter,
-      },
-      {
         id: 'actions',
         cell: ({ row }) => (
           <WineRowActions wine={row.original} onDelete={() => setDeleteTarget(row.original)} />
@@ -261,21 +402,18 @@ export function WineTable({ wines }: { wines: SerializedWine[] }) {
     []
   )
 
-  const filterOptions = useMemo<WineFilterOptions>(() => {
-    const countries = new Set<string>()
-    const regions = new Set<string>()
-    const varietals = new Set<string>()
+  const filterOptions = useMemo(() => {
+    const styles = new Set<string>()
+    const formats = new Set<string>()
 
     for (const wine of filteredWines) {
-      if (wine.country) countries.add(wine.country)
-      if (wine.region) regions.add(wine.region)
-      if (wine.varietal) varietals.add(wine.varietal)
+      if (wine.style) styles.add(wine.style)
+      if (wine.format) formats.add(wine.format)
     }
 
     return {
-      countries: Array.from(countries).sort(),
-      regions: Array.from(regions).sort(),
-      varietals: Array.from(varietals).sort(),
+      styles: Array.from(styles).sort(),
+      formats: Array.from(formats).sort(),
     }
   }, [filteredWines])
 
@@ -285,7 +423,7 @@ export function WineTable({ wines }: { wines: SerializedWine[] }) {
     state: { sorting, columnFilters, columnVisibility, globalFilter },
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
-    onColumnVisibilityChange: setColumnVisibility,
+    onColumnVisibilityChange: handleVisibilityChange,
     onGlobalFilterChange: setGlobalFilter,
     globalFilterFn: globalSearchFilter,
     getCoreRowModel: getCoreRowModel(),
@@ -321,7 +459,10 @@ export function WineTable({ wines }: { wines: SerializedWine[] }) {
             ))}
           </div>
         </div>
-        <WineFilters table={table} options={filterOptions} />
+        <div className="flex items-center gap-2">
+          <WineFilters table={table} options={filterOptions} />
+          <ColumnToggle visibility={columnVisibility} onToggle={handleColumnToggle} />
+        </div>
       </div>
 
       <div className="rounded-md border border-border">

@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { notFound, redirect } from 'next/navigation'
 import { Pencil } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth/current-user'
-import { getWine, getConsumptionLogs } from '@/lib/wines/queries'
+import { getWine, getConsumptionLogs, getEstimatedValue } from '@/lib/wines/queries'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -71,7 +71,8 @@ export default async function WineDetailPage({ params }: WineDetailPageProps) {
   const totalCostOverride = wine.totalCostOverride ? wine.totalCostOverride.toNumber() : null
   const totalValueOverride = wine.totalValueOverride ? wine.totalValueOverride.toNumber() : null
   const totalCost = totalCostOverride ?? (purchasePrice !== null ? purchasePrice * wine.quantity : null)
-  const totalEstValue = totalValueOverride ?? (currentEstValue !== null ? currentEstValue * wine.quantity : null)
+  const estValue = getEstimatedValue(currentEstValue, purchasePrice)
+  const totalEstValue = totalValueOverride ?? (estValue.perBottle !== null ? estValue.perBottle * wine.quantity : null)
   const drinkWindow = formatDrinkWindow(wine.drinkWindowStart, wine.drinkWindowEnd)
   const remaining = wine.quantity - wine.consumedQuantity
 
@@ -166,11 +167,19 @@ export default async function WineDetailPage({ params }: WineDetailPageProps) {
           <DetailField label="Wine ID" value={wine.wineId} />
           <DetailField
             label="Current Est. Value"
-            value={currentEstValue !== null ? formatCurrency(currentEstValue) : null}
+            value={
+              estValue.perBottle !== null
+                ? `${estValue.isApproximate ? '≈' : ''}${formatCurrency(estValue.perBottle)}`
+                : 'No data'
+            }
           />
           <DetailField
             label="Total Est. Value"
-            value={totalEstValue !== null ? formatCurrency(totalEstValue) : null}
+            value={
+              totalEstValue !== null
+                ? `${estValue.isApproximate && totalValueOverride === null ? '≈' : ''}${formatCurrency(totalEstValue)}`
+                : 'No data'
+            }
           />
           <DetailField label="Rating" value={rating !== null ? formatRating(rating) : null} />
           <DetailField label="Drink Window" value={drinkWindow} />

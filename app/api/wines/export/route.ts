@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth/current-user'
 import { prisma } from '@/lib/prisma/client'
+import { getEstimatedValue } from '@/lib/wines/queries'
 
 function escapeCSV(value: string | null | undefined): string {
   if (value === null || value === undefined) return ''
@@ -37,13 +38,14 @@ export async function GET() {
     const totalCostOverride = w.totalCostOverride ? w.totalCostOverride.toNumber() : null
     const totalValueOverride = w.totalValueOverride ? w.totalValueOverride.toNumber() : null
     const totalCost = totalCostOverride ?? (purchasePrice !== null ? purchasePrice * w.quantity : null)
-    const totalValue = totalValueOverride ?? (currentEstValue !== null ? currentEstValue * w.quantity : null)
+    const estValue = getEstimatedValue(currentEstValue, purchasePrice)
+    const totalValue = totalValueOverride ?? (estValue.perBottle !== null ? estValue.perBottle * w.quantity : null)
     const rating = w.rating ? w.rating.toNumber() : null
 
     return [
       w.producer, w.wineName, w.vintage, w.country, w.state, w.region,
       w.subRegion, w.vineyard, w.classification, w.varietal, w.style, w.format,
-      w.quantity, purchasePrice, currentEstValue, totalCost,
+      w.quantity, purchasePrice, estValue.perBottle, totalCost,
       totalValue, w.purchaseDate?.toISOString().split('T')[0], w.vendor,
       w.storageLocation, w.drinkWindowStart, w.drinkWindowEnd, rating,
       w.tastingNotes, w.pairingNotes, w.notes, w.wineId,
