@@ -264,14 +264,24 @@ function mergeSuggestions(...lists: MergedSuggestion[][]): MergedSuggestion[] {
   return merged
 }
 
+interface WineFormPrefill {
+  producer?: string
+  wineName?: string
+  vintage?: number
+  country?: string
+  region?: string
+  varietal?: string
+}
+
 interface WineFormProps {
   mode: 'create' | 'edit'
   wine?: SerializedWine
   existingRegions: string[]
   existingVarietals: string[]
+  prefill?: WineFormPrefill
 }
 
-export function WineForm({ mode, wine, existingRegions, existingVarietals }: WineFormProps) {
+export function WineForm({ mode, wine, existingRegions, existingVarietals, prefill }: WineFormProps) {
   const router = useRouter()
   const [serverError, setServerError] = useState<string | null>(null)
 
@@ -286,7 +296,9 @@ export function WineForm({ mode, wine, existingRegions, existingVarietals }: Win
 
   const form = useForm<WineFormValues>({
     resolver: zodResolver(wineFormSchema),
-    defaultValues: wine
+    defaultValues: prefill && !wine
+      ? { ...wineFormDefaultValues, ...prefill }
+      : wine
       ? {
           producer: wine.producer,
           wineName: wine.wineName,

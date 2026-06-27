@@ -16,19 +16,19 @@ const OPTIONS: {
   {
     value: 'NEW_INVENTORY',
     label: 'New Inventory',
-    description: 'Wines you currently have in your cellar',
+    description: 'Wines currently in your cellar',
     icon: <PackagePlus className="h-6 w-6" />,
   },
   {
     value: 'MATCH_CONSUMED',
-    label: 'Consumed Wines from My Cellar',
-    description: 'Match and mark existing wines in your cellar as consumed',
+    label: 'Mark Cellar Wines Consumed',
+    description: 'Match and update wines already in Wine Butler AI',
     icon: <Wine className="h-6 w-6" />,
   },
   {
     value: 'HISTORICAL_CONSUMED',
-    label: 'Historical Consumed Inventory',
-    description: "Wines you've already drunk that aren't in your cellar",
+    label: 'Historical Collection',
+    description: "Wines you've drunk that aren't in your cellar yet",
     icon: <Clock className="h-6 w-6" />,
   },
 ]

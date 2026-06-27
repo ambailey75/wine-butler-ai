@@ -5,6 +5,7 @@ import Link from 'next/link'
 import {
   type ColumnDef,
   type ColumnFiltersState,
+  type VisibilityState,
   type FilterFn,
   type SortingState,
   flexRender,
@@ -14,7 +15,7 @@ import {
   getSortedRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { ArrowUpDown, Check, Eye, GlassWater, MoreHorizontal, Trash2 } from 'lucide-react'
+import { ArrowUpDown, Check, Eye, GlassWater, MoreHorizontal, Pencil, Trash2 } from 'lucide-react'
 import type { SerializedWine } from '@/lib/wines/queries'
 import { getEstimatedValue } from '@/lib/wines/queries'
 import {
@@ -40,6 +41,18 @@ import { DeleteWineDialog } from './DeleteWineDialog'
 import { MarkConsumedDialog } from './MarkConsumedDialog'
 
 const STYLE_OPTIONS = ['Red', 'White', 'Rosé', 'Sparkling', 'Dessert', 'Fortified']
+
+const DEFAULT_COLUMN_VISIBILITY: VisibilityState = {
+  subRegion: false,
+  countryState: false,
+  vineyard: false,
+  totalCost: false,
+  format: false,
+  storageLocation: false,
+  notes: false,
+  tastingNotes: false,
+  pairingNotes: false,
+}
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value)
@@ -177,10 +190,11 @@ function TextEditCell({
   return (
     <div
       onClick={() => onStart(wineId, field)}
-      className={`cursor-pointer rounded px-1 py-0.5 text-xs hover:bg-accent ${className ?? ''}`}
+      className={`group relative cursor-pointer rounded px-1 py-0.5 text-xs hover:bg-amber-50/40 hover:ring-1 hover:ring-[rgba(201,168,76,0.45)] ${className ?? ''}`}
     >
       {isSaved && <Check className="mr-1 inline h-3 w-3 text-emerald-500" />}
       {value || <span className="text-muted-foreground">{placeholder ?? '—'}</span>}
+      <Pencil className="absolute right-0.5 top-0.5 h-2.5 w-2.5 text-amber-500/50 opacity-0 group-hover:opacity-100" />
     </div>
   )
 }
@@ -239,10 +253,11 @@ function NumberEditCell({
   return (
     <div
       onClick={() => onStart(wineId, field)}
-      className="cursor-pointer rounded px-1 py-0.5 text-xs hover:bg-accent"
+      className="group relative cursor-pointer rounded px-1 py-0.5 text-xs hover:bg-amber-50/40 hover:ring-1 hover:ring-[rgba(201,168,76,0.45)]"
     >
       {isSaved && <Check className="mr-1 inline h-3 w-3 text-emerald-500" />}
       {value !== null ? (format ? format(value) : value) : <span className="text-muted-foreground">—</span>}
+      <Pencil className="absolute right-0.5 top-0.5 h-2.5 w-2.5 text-amber-500/50 opacity-0 group-hover:opacity-100" />
     </div>
   )
 }
@@ -299,10 +314,11 @@ function StyleSelectCell({
   return (
     <div
       onClick={() => onStart(wineId, 'style')}
-      className="cursor-pointer rounded px-1 py-0.5 text-xs hover:bg-accent"
+      className="group relative cursor-pointer rounded px-1 py-0.5 text-xs hover:bg-amber-50/40 hover:ring-1 hover:ring-[rgba(201,168,76,0.45)]"
     >
       {isSaved && <Check className="mr-1 inline h-3 w-3 text-emerald-500" />}
       {value || <span className="text-muted-foreground">—</span>}
+      <Pencil className="absolute right-0.5 top-0.5 h-2.5 w-2.5 text-amber-500/50 opacity-0 group-hover:opacity-100" />
     </div>
   )
 }
@@ -380,7 +396,7 @@ function DualFieldCell({
   return (
     <div
       onClick={() => onStart(wineId, dualField)}
-      className="cursor-pointer rounded px-1 py-0.5 hover:bg-accent"
+      className="group relative cursor-pointer rounded px-1 py-0.5 hover:bg-amber-50/40 hover:ring-1 hover:ring-[rgba(201,168,76,0.45)]"
     >
       {isSaved && <Check className="mr-1 inline h-3 w-3 text-emerald-500" />}
       <div className="text-xs leading-tight">
@@ -389,6 +405,7 @@ function DualFieldCell({
       {bottomValue && (
         <div className="text-[10px] leading-tight text-muted-foreground">{bottomValue}</div>
       )}
+      <Pencil className="absolute right-0.5 top-0.5 h-2.5 w-2.5 text-amber-500/50 opacity-0 group-hover:opacity-100" />
     </div>
   )
 }
@@ -442,10 +459,133 @@ function NotesEditCell({
     <div
       onClick={() => onStart(wineId, field)}
       title={value ?? undefined}
-      className="max-w-[120px] cursor-pointer truncate rounded px-1 py-0.5 text-xs hover:bg-accent"
+      className="group relative max-w-[120px] cursor-pointer truncate rounded px-1 py-0.5 text-xs hover:bg-amber-50/40 hover:ring-1 hover:ring-[rgba(201,168,76,0.45)]"
     >
       {isSaved && <Check className="mr-1 inline h-3 w-3 text-emerald-500" />}
       {truncated || <span className="text-muted-foreground">—</span>}
+      <Pencil className="absolute right-0.5 top-0.5 h-2.5 w-2.5 text-amber-500/50 opacity-0 group-hover:opacity-100" />
+    </div>
+  )
+}
+
+// ─── Mobile Card ─────────────────────────────────────────────────────────────
+
+function WineMobileCard({
+  wine,
+  onDelete,
+  onConsume,
+}: {
+  wine: SerializedWine
+  onDelete: () => void
+  onConsume: () => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const est = getEstimatedValue(wine.currentEstValue, wine.purchasePrice)
+
+  const drinkWindow =
+    wine.drinkWindowStart && wine.drinkWindowEnd
+      ? `${wine.drinkWindowStart} – ${wine.drinkWindowEnd}`
+      : wine.drinkWindowStart
+      ? `${wine.drinkWindowStart}+`
+      : wine.drinkWindowEnd
+      ? `Until ${wine.drinkWindowEnd}`
+      : null
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="font-semibold leading-tight text-foreground">
+            {wine.producer} {wine.wineName}
+          </p>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            {[wine.vintage?.toString(), wine.varietal, wine.region].filter(Boolean).join(' · ')}
+          </p>
+        </div>
+        <WineRowActions wine={wine} onDelete={onDelete} onConsume={onConsume} />
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {wine.style && (
+          <span className="inline-flex items-center rounded-full bg-secondary/10 px-2 py-0.5 text-xs font-medium text-secondary">
+            {wine.style}
+          </span>
+        )}
+        <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+          {wine.quantity} {wine.quantity === 1 ? 'bottle' : 'bottles'}
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+        <div>
+          <p className="text-xs text-muted-foreground">Price</p>
+          <p className="font-medium">{wine.purchasePrice ? formatCurrency(wine.purchasePrice) : '—'}</p>
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">Est. Value</p>
+          <p className="font-medium">
+            {est.perBottle !== null
+              ? est.isApproximate
+                ? `≈${formatCurrency(est.perBottle)}`
+                : formatCurrency(est.perBottle)
+              : '—'}
+          </p>
+        </div>
+        {wine.rating !== null && (
+          <div>
+            <p className="text-xs text-muted-foreground">Score</p>
+            <p className="font-medium">{wine.rating}</p>
+          </div>
+        )}
+        {drinkWindow && (
+          <div>
+            <p className="text-xs text-muted-foreground">Drink Window</p>
+            <p className="font-medium">{drinkWindow}</p>
+          </div>
+        )}
+      </div>
+
+      {expanded && (
+        <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-border pt-3 text-sm">
+          {wine.country && (
+            <div>
+              <p className="text-xs text-muted-foreground">Country</p>
+              <p>{wine.country}{wine.state ? ` / ${wine.state}` : ''}</p>
+            </div>
+          )}
+          {wine.vineyard && (
+            <div>
+              <p className="text-xs text-muted-foreground">Vineyard</p>
+              <p>{wine.vineyard}</p>
+            </div>
+          )}
+          {wine.format && (
+            <div>
+              <p className="text-xs text-muted-foreground">Format</p>
+              <p>{wine.format}</p>
+            </div>
+          )}
+          {wine.storageLocation && (
+            <div>
+              <p className="text-xs text-muted-foreground">Location</p>
+              <p>{wine.storageLocation}</p>
+            </div>
+          )}
+          {wine.notes && (
+            <div className="col-span-2">
+              <p className="text-xs text-muted-foreground">Notes</p>
+              <p>{wine.notes}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="mt-3 text-xs text-muted-foreground hover:text-foreground"
+      >
+        {expanded ? 'Show less' : 'Show more'}
+      </button>
     </div>
   )
 }
@@ -502,14 +642,33 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
   const [wines, setWines] = useState(initialWines)
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(DEFAULT_COLUMN_VISIBILITY)
   const [globalFilter, setGlobalFilter] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<SerializedWine | null>(null)
   const [consumeTarget, setConsumeTarget] = useState<SerializedWine | null>(null)
   const [cellarView, setCellarView] = useState<CellarView>('in-cellar')
+  const [showEditTooltip, setShowEditTooltip] = useState(false)
 
   useEffect(() => { setWines(initialWines) }, [initialWines])
+  useEffect(() => {
+    if (!localStorage.getItem('wine-butler-edit-tooltip-seen')) setShowEditTooltip(true)
+  }, [])
 
   const { editing, savedCell, startEdit, cancelEdit, saveField } = useInlineEdit(wines, setWines)
+
+  const startEditWithDismiss = useCallback((wineId: string, field: string) => {
+    if (showEditTooltip) {
+      localStorage.setItem('wine-butler-edit-tooltip-seen', '1')
+      setShowEditTooltip(false)
+    }
+    startEdit(wineId, field)
+  }, [showEditTooltip, startEdit])
+
+  const tabCounts = useMemo(() => ({
+    inCellar: wines.filter((w) => !w.isFullyConsumed).length,
+    all: wines.length,
+    consumed: wines.filter((w) => w.isFullyConsumed).length,
+  }), [wines])
 
   const filteredWines = useMemo(() => {
     if (cellarView === 'all') return wines
@@ -527,7 +686,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             value={row.original.producer}
             wineId={row.original.id} field="producer"
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
             className="font-medium"
           />
         ),
@@ -540,7 +699,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             value={row.original.wineName}
             wineId={row.original.id} field="wineName"
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
           />
         ),
       },
@@ -552,7 +711,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             value={row.original.vintage}
             wineId={row.original.id} field="vintage"
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
           />
         ),
         filterFn: exactYearFilter,
@@ -569,7 +728,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             topField="country" bottomField="state"
             topLabel="Country" bottomLabel="State"
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
           />
         ),
         filterFn: multiSelectFilter,
@@ -586,7 +745,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             topField="region" bottomField="subRegion"
             topLabel="Region" bottomLabel="Sub-Region"
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
           />
         ),
         filterFn: multiSelectFilter,
@@ -607,7 +766,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             value={row.original.varietal}
             wineId={row.original.id} field="varietal"
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
           />
         ),
         filterFn: multiSelectFilter,
@@ -620,7 +779,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             value={row.original.vineyard}
             wineId={row.original.id} field="vineyard"
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
           />
         ),
       },
@@ -632,7 +791,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             value={row.original.quantity}
             wineId={row.original.id} field="quantity"
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
           />
         ),
       },
@@ -644,7 +803,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             value={row.original.style}
             wineId={row.original.id}
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
           />
         ),
       },
@@ -656,7 +815,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             value={row.original.purchasePrice}
             wineId={row.original.id} field="purchasePrice"
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
             format={formatCurrency}
           />
         ),
@@ -669,7 +828,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             value={row.original.rating}
             wineId={row.original.id} field="rating"
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
           />
         ),
         filterFn: minRatingFilter,
@@ -693,7 +852,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
                 value={w.currentEstValue}
                 wineId={w.id} field="currentEstValue"
                 editing={editing} savedCell={savedCell}
-                onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+                onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
                 format={formatCurrency}
               />
             )
@@ -701,7 +860,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
 
           return (
             <div
-              onClick={() => startEdit(w.id, 'currentEstValue')}
+              onClick={() => startEditWithDismiss(w.id, 'currentEstValue')}
               className="cursor-pointer rounded px-1 py-0.5 text-xs hover:bg-accent"
             >
               {isSaved && <Check className="mr-1 inline h-3 w-3 text-emerald-500" />}
@@ -766,7 +925,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             value={row.original.drinkWindowStart}
             wineId={row.original.id} field="drinkWindowStart"
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
           />
         ),
       },
@@ -778,7 +937,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             value={row.original.drinkWindowEnd}
             wineId={row.original.id} field="drinkWindowEnd"
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
           />
         ),
       },
@@ -790,7 +949,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             value={row.original.format}
             wineId={row.original.id} field="format"
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
           />
         ),
       },
@@ -802,7 +961,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             value={row.original.storageLocation}
             wineId={row.original.id} field="storageLocation"
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
           />
         ),
       },
@@ -814,7 +973,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             value={row.original.notes}
             wineId={row.original.id} field="notes"
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
           />
         ),
       },
@@ -826,7 +985,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             value={row.original.tastingNotes}
             wineId={row.original.id} field="tastingNotes"
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
           />
         ),
       },
@@ -838,7 +997,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             value={row.original.pairingNotes}
             wineId={row.original.id} field="pairingNotes"
             editing={editing} savedCell={savedCell}
-            onStart={startEdit} onSave={saveField} onCancel={cancelEdit}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
           />
         ),
       },
@@ -853,7 +1012,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
         ),
       },
     ],
-    [editing, savedCell, startEdit, saveField, cancelEdit]
+    [editing, savedCell, startEditWithDismiss, saveField, cancelEdit]
   )
 
   const filterOptions = useMemo(() => {
@@ -883,16 +1042,17 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
   const table = useReactTable({
     data: filteredWines,
     columns,
-    state: { sorting, columnFilters, globalFilter },
+    state: { sorting, columnFilters, globalFilter, columnVisibility },
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
     onGlobalFilterChange: setGlobalFilter,
+    onColumnVisibilityChange: setColumnVisibility,
     globalFilterFn: globalSearchFilter,
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    initialState: { pagination: { pageSize: 40 }, columnVisibility: { subRegion: false } },
+    initialState: { pagination: { pageSize: 40 } },
   })
 
   return (
@@ -906,19 +1066,25 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             className="sm:max-w-xs"
           />
           <div className="flex rounded-md border border-border">
-            {(['in-cellar', 'all', 'consumed'] as CellarView[]).map((view) => (
-              <button
-                key={view}
-                onClick={() => setCellarView(view)}
-                className={`px-3 py-1.5 text-xs font-medium transition-colors first:rounded-l-md last:rounded-r-md ${
-                  cellarView === view
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                {view === 'in-cellar' ? 'In Cellar' : view === 'all' ? 'All' : 'Consumed'}
-              </button>
-            ))}
+            {(['in-cellar', 'all', 'consumed'] as CellarView[]).map((view) => {
+              const label =
+                view === 'in-cellar' ? `In Cellar (${tabCounts.inCellar})`
+                : view === 'all' ? `All (${tabCounts.all})`
+                : `Consumed (${tabCounts.consumed})`
+              return (
+                <button
+                  key={view}
+                  onClick={() => setCellarView(view)}
+                  className={`px-3 py-1.5 text-xs font-medium transition-colors first:rounded-l-md last:rounded-r-md ${
+                    cellarView === view
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {label}
+                </button>
+              )
+            })}
           </div>
         </div>
         <WineFilters
@@ -926,10 +1092,30 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
           options={filterOptions}
           globalFilter={globalFilter}
           onClearSearch={() => setGlobalFilter('')}
+          onResetColumns={() => setColumnVisibility(DEFAULT_COLUMN_VISIBILITY)}
         />
       </div>
 
-      <div className="overflow-x-auto rounded-md border border-border">
+      {/* Mobile: card list */}
+      <div className="md:hidden space-y-3">
+        {table.getRowModel().rows.length ? (
+          table.getRowModel().rows.map((row) => (
+            <WineMobileCard
+              key={row.id}
+              wine={row.original}
+              onDelete={() => setDeleteTarget(row.original)}
+              onConsume={() => setConsumeTarget(row.original)}
+            />
+          ))
+        ) : (
+          <p className="py-10 text-center text-sm text-muted-foreground">
+            No wines match your search or filters.
+          </p>
+        )}
+      </div>
+
+      {/* Desktop: table */}
+      <div className="hidden md:block overflow-x-auto rounded-md border border-border">
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
@@ -991,6 +1177,22 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
           setConsumeTarget(null)
         }}
       />
+
+      {showEditTooltip && (
+        <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg bg-foreground px-4 py-2.5 text-sm text-background shadow-lg">
+          <Pencil className="h-3.5 w-3.5 shrink-0" />
+          Click any cell to edit
+          <button
+            onClick={() => {
+              localStorage.setItem('wine-butler-edit-tooltip-seen', '1')
+              setShowEditTooltip(false)
+            }}
+            className="ml-2 text-background/50 hover:text-background"
+          >
+            ✕
+          </button>
+        </div>
+      )}
     </div>
   )
 }

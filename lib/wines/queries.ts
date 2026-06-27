@@ -86,6 +86,14 @@ export function getEstimatedValue(currentEstValue: number | null, purchasePrice:
   return { perBottle: null, isApproximate: false }
 }
 
+export interface DrinkSoonWine {
+  id: string
+  producer: string
+  wineName: string
+  vintage: number | null
+  drinkWindowEnd: number
+}
+
 export interface DashboardSummary {
   totalBottles: number
   totalCostBasis: number
@@ -93,6 +101,8 @@ export interface DashboardSummary {
   netGainLoss: number
   netGainLossPercent: number | null
   bottlesAtPeak: number
+  drinkSoonCount: number
+  drinkSoonWines: DrinkSoonWine[]
 }
 
 export async function getDashboardSummary(userId: string): Promise<DashboardSummary> {
@@ -126,19 +136,40 @@ export async function getDashboardSummary(userId: string): Promise<DashboardSumm
   const netGainLossPercent = totalCostBasis > 0 ? (netGainLoss / totalCostBasis) * 100 : null
 
   const currentYear = new Date().getFullYear()
-  const peakWines = await prisma.wine.findMany({
-    where: {
-      userId,
-      enrichment: {
-        peakWindowStart: { lte: currentYear },
-        peakWindowEnd: { gte: currentYear },
-      },
-    },
-    select: { quantity: true },
-  })
-  const bottlesAtPeak = peakWines.reduce((sum, w) => sum + w.quantity, 0)
 
-  return { totalBottles, totalCostBasis, totalCurrentValue, netGainLoss, netGainLossPercent, bottlesAtPeak }
+  const [peakWines, drinkSoonRaw] = await Promise.all([
+    prisma.wine.findMany({
+      where: {
+        userId,
+        enrichment: {
+          peakWindowStart: { lte: currentYear },
+          peakWindowEnd: { gte: currentYear },
+        },
+      },
+      select: { quantity: true },
+    }),
+    prisma.wine.findMany({
+      where: {
+        userId,
+        isFullyConsumed: false,
+        drinkWindowEnd: { lte: currentYear + 2 },
+      },
+      orderBy: { drinkWindowEnd: 'asc' },
+      select: { id: true, producer: true, wineName: true, vintage: true, drinkWindowEnd: true },
+    }),
+  ])
+
+  const bottlesAtPeak = peakWines.reduce((sum, w) => sum + w.quantity, 0)
+  const drinkSoonCount = drinkSoonRaw.length
+  const drinkSoonWines: DrinkSoonWine[] = drinkSoonRaw.slice(0, 3).map((w) => ({
+    id: w.id,
+    producer: w.producer,
+    wineName: w.wineName,
+    vintage: w.vintage,
+    drinkWindowEnd: w.drinkWindowEnd as number,
+  }))
+
+  return { totalBottles, totalCostBasis, totalCurrentValue, netGainLoss, netGainLossPercent, bottlesAtPeak, drinkSoonCount, drinkSoonWines }
 }
 
 export async function getRecentConsumptionLogs(userId: string, limit = 5) {

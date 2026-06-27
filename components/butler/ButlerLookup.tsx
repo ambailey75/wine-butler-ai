@@ -1,7 +1,8 @@
 'use client'
 
 import { useState, useRef } from 'react'
-import { Search, Camera, Loader2, BookmarkPlus, Notebook } from 'lucide-react'
+import Link from 'next/link'
+import { Search, Camera, Loader2, BookmarkPlus, Notebook, PlusCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -101,8 +102,12 @@ export function ButlerLookup() {
           variant="outline"
           onClick={() => fileRef.current?.click()}
           disabled={loading}
+          className="flex h-auto min-h-[44px] min-w-[44px] flex-col items-center gap-0.5 py-1"
+          aria-label="Scan wine label or upload photo"
         >
           <Camera className="h-4 w-4" />
+          <span className="hidden text-[10px] leading-none sm:block">Upload Photo</span>
+          <span className="text-[10px] leading-none sm:hidden">Scan</span>
         </Button>
         <input
           ref={fileRef}
@@ -117,6 +122,9 @@ export function ButlerLookup() {
           }}
         />
       </div>
+      <p className="text-xs text-muted-foreground">
+        At a restaurant or wine shop? Snap a photo of the label for instant wine info.
+      </p>
 
       <div className="max-w-[200px]">
         <Label htmlFor="menuPrice" className="text-sm text-muted-foreground">
@@ -184,7 +192,7 @@ export function ButlerLookup() {
               </div>
             )}
 
-            <div className="flex gap-2 pt-2">
+            <div className="flex flex-wrap gap-2 pt-2">
               <WatchListForm
                 trigger={
                   <Button variant="outline" size="sm">
@@ -211,6 +219,24 @@ export function ButlerLookup() {
                   vintage: result.vintage ?? undefined,
                 }}
               />
+              <Button asChild variant="outline" size="sm">
+                <Link
+                  href={`/dashboard/cellar/new?${new URLSearchParams(
+                    Object.fromEntries(
+                      Object.entries({
+                        producer: result.producer,
+                        wineName: result.wineName,
+                        vintage: result.vintage?.toString(),
+                        region: result.region,
+                        varietal: result.varietal,
+                      }).filter(([, v]) => v != null) as [string, string][]
+                    )
+                  ).toString()}`}
+                >
+                  <PlusCircle className="mr-1.5 h-3.5 w-3.5" />
+                  Add to Cellar
+                </Link>
+              </Button>
             </div>
 
             <p className="text-xs text-muted-foreground">

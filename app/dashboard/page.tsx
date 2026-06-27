@@ -108,13 +108,44 @@ export default async function DashboardPage() {
           }
         />
       </div>
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <KpiCard
           label="Bottles at Peak"
           value={summary.bottlesAtPeak.toLocaleString()}
-          caption="Updates once enrichment runs (Phase 5)"
+          caption="Updates once enrichment runs"
         />
+        <Link href="/dashboard/cellar" className="block">
+          <KpiCard
+            label="Drink Soon"
+            value={
+              <span className={summary.drinkSoonCount > 0 ? 'text-amber-500' : undefined}>
+                {summary.drinkSoonCount.toLocaleString()}
+              </span>
+            }
+            caption="Within the next 2 years"
+            className={summary.drinkSoonCount > 0 ? 'ring-1 ring-amber-300/40 hover:ring-amber-400/60 transition-shadow' : undefined}
+          />
+        </Link>
       </div>
+      {summary.drinkSoonWines.length > 0 && (
+        <div className="rounded-lg border border-amber-200/60 bg-amber-50/30 p-4">
+          <p className="mb-3 text-sm font-semibold text-amber-800">Drink soon</p>
+          <ul className="space-y-2">
+            {summary.drinkSoonWines.map((wine) => (
+              <li key={wine.id} className="flex items-center justify-between text-sm">
+                <span className="text-foreground">
+                  {wine.producer} {wine.wineName}
+                  {wine.vintage ? ` (${wine.vintage})` : ''}
+                </span>
+                <span className="text-amber-700 font-medium">Drink by {wine.drinkWindowEnd}</span>
+              </li>
+            ))}
+          </ul>
+          <Link href="/dashboard/cellar" className="mt-3 block text-xs text-amber-700 hover:underline">
+            View all in cellar
+          </Link>
+        </div>
+      )}
       {recentWines.length > 0 && <RecentWines wines={recentWines} />}
       {recentConsumption.length > 0 && (
         <Card>

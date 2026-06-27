@@ -3,13 +3,28 @@ import { getCurrentUser } from '@/lib/auth/current-user'
 import { getDistinctRegionsAndVarietals } from '@/lib/wines/queries'
 import { WineForm } from '@/components/cellar/WineForm'
 
-export default async function NewWinePage() {
+export default async function NewWinePage({
+  searchParams,
+}: {
+  searchParams: { producer?: string; wineName?: string; vintage?: string; region?: string; varietal?: string; country?: string }
+}) {
   const user = await getCurrentUser()
   if (!user) {
     redirect('/login')
   }
 
   const { regions, varietals } = await getDistinctRegionsAndVarietals(user.id)
+
+  const prefill = Object.keys(searchParams).length > 0
+    ? {
+        producer: searchParams.producer,
+        wineName: searchParams.wineName,
+        vintage: searchParams.vintage ? Number(searchParams.vintage) : undefined,
+        region: searchParams.region,
+        varietal: searchParams.varietal,
+        country: searchParams.country,
+      }
+    : undefined
 
   return (
     <div className="space-y-6">
@@ -20,7 +35,7 @@ export default async function NewWinePage() {
           filled in later.
         </p>
       </div>
-      <WineForm mode="create" existingRegions={regions} existingVarietals={varietals} />
+      <WineForm mode="create" existingRegions={regions} existingVarietals={varietals} prefill={prefill} />
     </div>
   )
 }
