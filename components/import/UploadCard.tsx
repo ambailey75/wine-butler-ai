@@ -2,10 +2,14 @@
 
 import { useCallback, useState, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
-import { useDropzone } from 'react-dropzone'
+import { useDropzone, type FileRejection } from 'react-dropzone'
 import { Loader2 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
+
+// Extensions that Windows/Chrome may assign an unexpected or empty MIME type.
+// If react-dropzone rejects these, we bypass the rejection and upload anyway.
+const EXTENSION_BYPASS = new Set(['mhtml', 'mht', 'eml'])
 
 interface UploadCardProps {
   title: string
@@ -22,11 +26,8 @@ export function UploadCard({ title, description, icon, accept, sourceHint, impor
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const onDrop = useCallback(
-    async (acceptedFiles: File[]) => {
-      const file = acceptedFiles[0]
-      if (!file) return
-
+  const uploadFile = useCallback(
+    async (file: File) => {
       setUploading(true)
       setError(null)
 
@@ -65,8 +66,44 @@ export function UploadCard({ title, description, icon, accept, sourceHint, impor
     [router, sourceHint, importType, historicalConsumedDate]
   )
 
+  const onDrop = useCallback(
+    async (acceptedFiles: File[]) => {
+      const file = acceptedFiles[0]
+      if (!file) return
+      console.log('[UploadCard] Accepted file:', file.name, '| type:', file.type || '(empty)')
+      await uploadFile(file)
+    },
+    [uploadFile]
+  )
+
+  const onDropRejected = useCallback(
+    (fileRejections: FileRejection[]) => {
+      const rejection = fileRejections[0]
+      if (!rejection) return
+
+      const { file, errors } = rejection
+      const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+      console.log(
+        '[UploadCard] Rejected file:', file.name,
+        '| type:', file.type || '(empty)',
+        '| ext:', ext,
+        '| errors:', errors.map((e) => e.code).join(', ')
+      )
+
+      if (EXTENSION_BYPASS.has(ext)) {
+        // MIME type varies by OS/browser for these formats — upload by extension
+        console.log('[UploadCard] Bypassing rejection — uploading by extension:', ext)
+        void uploadFile(file)
+      } else {
+        setError('File type not supported. Use PDF, HTML, MHTML, EML, or image files.')
+      }
+    },
+    [uploadFile]
+  )
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
+    onDropRejected,
     accept,
     maxFiles: 1,
     disabled: uploading,

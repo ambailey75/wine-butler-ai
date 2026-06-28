@@ -143,7 +143,7 @@ const STRUCTURED_MIME_TYPES = new Set([
 
 async function processImage(importId: string, file: File, isInvoice = false): Promise<ProcessResult> {
   const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-  const isStructuredMime = STRUCTURED_MIME_TYPES.has(file.type) || ext === 'mhtml' || ext === 'eml'
+  const isStructuredMime = STRUCTURED_MIME_TYPES.has(file.type) || ext === 'mhtml' || ext === 'mht' || ext === 'eml'
   const isHtml = isStructuredMime || file.type === 'text/html' || /\.html?$/i.test(file.name)
 
   if (isHtml) {

@@ -36,6 +36,7 @@ const EXTENSION_SOURCE_TYPES: Record<string, ImportSourceType> = {
   html: 'IMAGE',
   htm: 'IMAGE',
   mhtml: 'IMAGE',
+  mht: 'IMAGE',
   eml: 'IMAGE',
 }
 
