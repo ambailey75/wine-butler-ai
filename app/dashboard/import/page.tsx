@@ -25,12 +25,16 @@ const UPLOAD_CARDS: {
     },
   },
   {
-    title: 'PDF, HTML, or Image Invoice',
-    description: 'Upload purchase invoices as PDF, saved webpage, or photo of a paper invoice',
+    title: 'PDF, HTML, MHTML, or Email Invoice',
+    description: 'Upload purchase invoices as PDF, saved webpage (.html/.mhtml), or saved email receipt (.eml)',
     icon: <FileText className="h-8 w-8 text-primary" />,
     accept: {
       'application/pdf': ['.pdf'],
       'text/html': ['.html', '.htm'],
+      'message/rfc822': ['.eml', '.mhtml'],
+      'multipart/related': ['.mhtml'],
+      'application/x-mimearchive': ['.mhtml'],
+      'application/octet-stream': ['.mhtml', '.eml'],
       'image/jpeg': ['.jpg', '.jpeg'],
       'image/png': ['.png'],
       'image/webp': ['.webp'],

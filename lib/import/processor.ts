@@ -103,12 +103,54 @@ async function processPdf(importId: string, buffer: Buffer): Promise<ProcessResu
   return {}
 }
 
+function decodeTransferEncoding(body: string, encoding: string): string {
+  const enc = encoding.trim().toLowerCase()
+  if (enc === 'quoted-printable') {
+    return body
+      .replace(/=\r?\n/g, '')
+      .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+  }
+  if (enc === 'base64') {
+    try { return Buffer.from(body.replace(/\s/g, ''), 'base64').toString('utf-8') } catch { return body }
+  }
+  return body
+}
+
+function extractTextFromMime(raw: string): string {
+  const boundaryMatch = raw.match(/boundary=["']?([^"'\r\n;]+)["']?/i)
+  if (!boundaryMatch) return raw
+  const boundary = boundaryMatch[1].trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const parts = raw.split(new RegExp(`--${boundary}(?:--)?\\r?\\n?`))
+  let htmlContent: string | null = null
+  let textContent: string | null = null
+  for (const part of parts) {
+    const headerEnd = part.search(/\r?\n\r?\n/)
+    if (headerEnd < 0) continue
+    const headers = part.slice(0, headerEnd)
+    const body = part.slice(headerEnd).trimStart()
+    const ct = headers.match(/Content-Type:\s*([^\r\n;]+)/i)?.[1]?.trim().toLowerCase() ?? ''
+    const enc = headers.match(/Content-Transfer-Encoding:\s*([^\r\n]+)/i)?.[1] ?? '7bit'
+    const decoded = decodeTransferEncoding(body, enc)
+    if (ct.startsWith('text/html') && !htmlContent) htmlContent = decoded
+    else if (ct.startsWith('text/plain') && !textContent) textContent = decoded
+  }
+  return htmlContent ?? textContent ?? raw
+}
+
+const STRUCTURED_MIME_TYPES = new Set([
+  'message/rfc822', 'multipart/related', 'application/x-mimearchive',
+])
+
 async function processImage(importId: string, file: File, isInvoice = false): Promise<ProcessResult> {
-  const isHtml = file.type === 'text/html' || /\.html?$/i.test(file.name)
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+  const isStructuredMime = STRUCTURED_MIME_TYPES.has(file.type) || ext === 'mhtml' || ext === 'eml'
+  const isHtml = isStructuredMime || file.type === 'text/html' || /\.html?$/i.test(file.name)
 
   if (isHtml) {
-    const html = await file.text()
+    const raw = await file.text()
+    const html = isStructuredMime ? extractTextFromMime(raw) : raw
     const extracted = await extractWinesFromText(html)
+
 
     if (extracted.length === 0) {
       await prisma.import.update({

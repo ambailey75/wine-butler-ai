@@ -64,6 +64,12 @@ const multiSelectFilter: FilterFn<SerializedWine> = (row, columnId, filterValue:
   return value !== null && filterValue.includes(value)
 }
 
+const countryStateFilter: FilterFn<SerializedWine> = (row, _columnId, filterValue: string[]) => {
+  if (!filterValue?.length) return true
+  const { country, state } = row.original
+  return filterValue.some((v) => v === country || v === state)
+}
+
 const exactYearFilter: FilterFn<SerializedWine> = (row, _columnId, filterValue) => {
   if (filterValue === undefined || filterValue === null) return true
   const value = row.getValue<number | null>('vintage')
@@ -690,6 +696,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             className="font-medium"
           />
         ),
+        filterFn: multiSelectFilter,
       },
       {
         accessorKey: 'wineName',
@@ -719,7 +726,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
       {
         id: 'countryState',
         accessorFn: (row) => row.country,
-        header: ({ column }) => <SortHeader column={column} label="Country" />,
+        header: ({ column }) => <SortHeader column={column} label="Country / State" />,
         cell: ({ row }) => (
           <DualFieldCell
             topValue={row.original.country}
@@ -731,7 +738,7 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
             onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
           />
         ),
-        filterFn: multiSelectFilter,
+        filterFn: countryStateFilter,
       },
       {
         id: 'regionSubRegion',
@@ -1016,14 +1023,17 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
   )
 
   const filterOptions = useMemo(() => {
-    const countries = new Set<string>()
+    const countryStates = new Set<string>()
+    const producers = new Set<string>()
     const regions = new Set<string>()
     const subRegions = new Set<string>()
     const varietals = new Set<string>()
     const vintages = new Set<number>()
 
     for (const wine of filteredWines) {
-      if (wine.country) countries.add(wine.country)
+      if (wine.country) countryStates.add(wine.country)
+      if (wine.state) countryStates.add(wine.state)
+      if (wine.producer) producers.add(wine.producer)
       if (wine.region) regions.add(wine.region)
       if (wine.subRegion) subRegions.add(wine.subRegion)
       if (wine.varietal) varietals.add(wine.varietal)
@@ -1031,7 +1041,8 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
     }
 
     return {
-      countries: Array.from(countries).sort(),
+      countries: Array.from(countryStates).sort(),
+      producers: Array.from(producers).sort(),
       regions: Array.from(regions).sort(),
       subRegions: Array.from(subRegions).sort(),
       varietals: Array.from(varietals).sort(),

@@ -219,6 +219,7 @@ const RATING_OPTIONS = [
 
 export interface WineFilterOptions {
   countries: string[]
+  producers: string[]
   regions: string[]
   subRegions: string[]
   varietals: string[]
@@ -234,6 +235,7 @@ interface WineFiltersProps {
 }
 
 export function WineFilters({ table, options, globalFilter, onClearSearch, onResetColumns }: WineFiltersProps) {
+  const producerFilter = (table.getColumn('producer')?.getFilterValue() as string[]) ?? []
   const countryFilter = (table.getColumn('countryState')?.getFilterValue() as string[]) ?? []
   const regionFilter = (table.getColumn('regionSubRegion')?.getFilterValue() as string[]) ?? []
   const subRegionFilter = (table.getColumn('subRegion')?.getFilterValue() as string[]) ?? []
@@ -242,6 +244,7 @@ export function WineFilters({ table, options, globalFilter, onClearSearch, onRes
   const vintageFilter = table.getColumn('vintage')?.getFilterValue() as number | undefined
 
   const hasFilters =
+    producerFilter.length > 0 ||
     countryFilter.length > 0 ||
     regionFilter.length > 0 ||
     subRegionFilter.length > 0 ||
@@ -251,6 +254,7 @@ export function WineFilters({ table, options, globalFilter, onClearSearch, onRes
     (globalFilter?.length ?? 0) > 0
 
   const clearAll = () => {
+    table.getColumn('producer')?.setFilterValue(undefined)
     table.getColumn('countryState')?.setFilterValue(undefined)
     table.getColumn('regionSubRegion')?.setFilterValue(undefined)
     table.getColumn('subRegion')?.setFilterValue(undefined)
@@ -263,7 +267,15 @@ export function WineFilters({ table, options, globalFilter, onClearSearch, onRes
   const filterContent = (
     <div className="flex flex-wrap items-center gap-2">
       <FacetedFilter
-        title="Country"
+        title="Producer"
+        options={options.producers}
+        selected={producerFilter}
+        onChange={(values) =>
+          table.getColumn('producer')?.setFilterValue(values.length ? values : undefined)
+        }
+      />
+      <FacetedFilter
+        title="Country / State"
         options={options.countries}
         selected={countryFilter}
         onChange={(values) =>

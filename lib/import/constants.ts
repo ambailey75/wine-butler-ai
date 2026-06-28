@@ -16,7 +16,10 @@ export const ALLOWED_MIME_TYPES: Record<ImportSourceType, string[]> = {
   ],
   CSV: ['text/csv', 'application/csv', 'application/vnd.ms-excel'],
   PDF: ['application/pdf', 'text/html', 'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'],
-  IMAGE: ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'text/html'],
+  IMAGE: [
+    'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'text/html',
+    'message/rfc822', 'multipart/related', 'application/x-mimearchive', 'application/octet-stream',
+  ],
 }
 
 const EXTENSION_SOURCE_TYPES: Record<string, ImportSourceType> = {
@@ -32,6 +35,8 @@ const EXTENSION_SOURCE_TYPES: Record<string, ImportSourceType> = {
   heif: 'IMAGE',
   html: 'IMAGE',
   htm: 'IMAGE',
+  mhtml: 'IMAGE',
+  eml: 'IMAGE',
 }
 
 export function detectSourceType(filename: string, mimeType: string): ImportSourceType | null {
