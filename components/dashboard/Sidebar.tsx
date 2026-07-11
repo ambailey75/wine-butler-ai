@@ -68,7 +68,7 @@ export function Sidebar({ alertCount = 0 }: { alertCount?: number }) {
       </nav>
       <div
         className="relative w-full overflow-hidden rounded-t-lg"
-        style={{ height: 200 }}
+        style={{ height: 'clamp(220px, 33vh, 400px)' }}
       >
         <div style={{ position: 'absolute', left: 0, top: 0, width: '200%', height: '100%' }}>
           <Image

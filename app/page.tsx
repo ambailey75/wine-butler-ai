@@ -14,18 +14,14 @@ export default function Home() {
           src="/images/vineyard-rows.png"
           alt="Vineyard rows at sunset"
           fill
-          style={{ objectFit: 'cover', objectPosition: 'center 40%' }}
+          style={{ objectFit: 'cover', objectPosition: 'center 30%' }}
           sizes="100vw"
           priority
         />
         <div
-          className="absolute inset-0"
-          style={{ background: 'rgba(45, 27, 30, 0.15)' }}
-        />
-        <div
           className="absolute inset-x-0 bottom-0"
           style={{
-            height: '40%',
+            height: '25%',
             background:
               'linear-gradient(to bottom, rgba(45, 27, 30, 0) 0%, rgba(45, 27, 30, 0.5) 100%)',
           }}
