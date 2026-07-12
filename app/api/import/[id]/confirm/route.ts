@@ -10,14 +10,17 @@ import { runEnrichment } from '@/lib/import/run-enrichment'
 import { CONFIRM_ENRICHABLE_FIELDS } from '@/lib/import/enrichable-fields'
 import { findMergeMatches, type MergeOutcome, type ExistingWineSnapshot } from '@/lib/import/find-merge-match'
 import type { EnrichableRow } from '@/lib/import/enrich-from-static'
+import { normalizeWineData } from '@/lib/wines/normalize'
 
-// ENRICHMENT REQUIREMENT: this route is both Layer 2 (pre-confirm safety
-// net) and Layer 3 (post-confirm background pass). Every row must be run
-// through runEnrichment() before a Wine record is created or updated — see
-// lib/import/run-enrichment.ts. This route also owns reconciliation
-// (lib/import/find-merge-match.ts): a row matching an existing cellar wine
-// must merge into it (add quantity, fill blanks) rather than create a
-// duplicate Wine row.
+// ENRICHMENT REQUIREMENT: this route is Layer 2 (pre-confirm safety net) —
+// every row must be run through normalizeWineData() and runEnrichment()
+// before a Wine record is created or updated. See
+// lib/import/run-enrichment.ts and lib/wines/normalize.ts. Layer 3
+// (post-confirm background enrichment) is a nightly cron job, not run from
+// here — see app/api/cron/enrich-new-wines/route.ts. This route also owns
+// reconciliation (lib/import/find-merge-match.ts): a row matching an
+// existing cellar wine must merge into it (add quantity, fill blanks)
+// rather than create a duplicate Wine row.
 
 export const maxDuration = 60
 
@@ -326,72 +329,6 @@ async function copyLabelPhoto(userId: string, sourcePath: string): Promise<strin
   return data.publicUrl
 }
 
-// Layer 3 — post-confirm background enrichment. Runs detached (not awaited
-// by the route's response) so it never blocks the client, with its own hard
-// timeout since Vercel can freeze the function shortly after the response
-// fully flushes — a cut-off run just leaves a wine's blanks as-is, no
-// corruption, and failures are log-only by design either way.
-const LAYER_3_TIMEOUT_MS = 15000
-
-function runLayer3InBackground(wineIds: string[]) {
-  if (wineIds.length === 0) return
-
-  const work = async () => {
-    const wines = await prisma.wine.findMany({ where: { id: { in: wineIds } } })
-    const rows: EnrichableRow[] = wines.map((w) => ({
-      mappedData: {
-        country: w.country ?? undefined,
-        state: w.state ?? undefined,
-        region: w.region ?? undefined,
-        subRegion: w.subRegion ?? undefined,
-        vineyard: w.vineyard ?? undefined,
-        classification: w.classification ?? undefined,
-        varietal: w.varietal ?? undefined,
-        style: w.style ?? undefined,
-        drinkWindowStart: w.drinkWindowStart ?? undefined,
-        drinkWindowEnd: w.drinkWindowEnd ?? undefined,
-        rating: w.rating ? w.rating.toNumber() : undefined,
-      },
-      confidenceScores: {},
-    }))
-
-    const enriched = await runEnrichment(rows, { layer: 'post-confirm', fields: CONFIRM_ENRICHABLE_FIELDS })
-
-    await Promise.allSettled(
-      enriched.map((row, i) => {
-        const wine = wines[i]
-        const data: Record<string, unknown> = {}
-        for (const field of CONFIRM_ENRICHABLE_FIELDS) {
-          const value = (row.mappedData as Record<string, unknown>)[field]
-          if (value != null && (wine as Record<string, unknown>)[field] == null) {
-            data[field] = value
-          }
-        }
-        if (Object.keys(data).length === 0) return Promise.resolve()
-        return prisma.wine.update({ where: { id: wine.id }, data }).catch((err) => {
-          console.error('[import confirm] Layer 3 background enrichment failed for wine', wine.id, err)
-        })
-      })
-    )
-  }
-
-  setImmediate(() => {
-    let timeoutId: ReturnType<typeof setTimeout>
-    const timeout = new Promise((resolve) => {
-      timeoutId = setTimeout(resolve, LAYER_3_TIMEOUT_MS)
-      // Never let this timer keep the process alive — Layer 3 is best-effort
-      // background work, not something that should block a clean shutdown.
-      timeoutId.unref?.()
-    })
-
-    Promise.race([work(), timeout])
-      .catch((err) => {
-        console.error('[import confirm] Layer 3 background enrichment errored', err)
-      })
-      .finally(() => clearTimeout(timeoutId))
-  })
-}
-
 export async function POST(request: Request, { params }: RouteParams) {
   const user = await getCurrentUser()
   if (!user) {
@@ -575,7 +512,6 @@ export async function POST(request: Request, { params }: RouteParams) {
       let totalFallback = 0
       let totalFailed = 0
       const rowErrors: Array<{ rowId: string; producer?: string; wineName?: string; error: string }> = []
-      const newlyCreatedWineIds: string[] = []
 
       type RowOutcome = { merged: true; usedFallback: false } | { merged: false; usedFallback: boolean; wineId: string }
 
@@ -586,7 +522,13 @@ export async function POST(request: Request, { params }: RouteParams) {
           const results = await Promise.allSettled(
             batch.map(async (row, batchIdx): Promise<RowOutcome> => {
               const globalIdx = i + batchIdx
-              const mapped = clampNumericFields(enrichedRows[globalIdx].mappedData)
+              // Layer 2 — final normalization pass before writing to the
+              // database (in addition to the normalization already applied
+              // inside runEnrichment above, this also catches appellation
+              // inference on any region/subRegion Claude just filled in).
+              const mapped = clampNumericFields(
+                normalizeWineData(enrichedRows[globalIdx].mappedData) as MappedWineData
+              )
               const isConsumed = consumedRowIds.has(row.id)
               const quantity = mapped.quantity && mapped.quantity > 0 ? Math.round(mapped.quantity) : 1
               const resolved = resolvedOutcomes[globalIdx]
@@ -675,7 +617,6 @@ export async function POST(request: Request, { params }: RouteParams) {
                 totalMerged++
               } else {
                 if (outcome.value.usedFallback) totalFallback++
-                newlyCreatedWineIds.push(outcome.value.wineId)
               }
               continue
             }
@@ -706,9 +647,6 @@ export async function POST(request: Request, { params }: RouteParams) {
               : {}),
           },
         })
-
-        // Layer 3 — fire-and-forget, does not block this response.
-        runLayer3InBackground(newlyCreatedWineIds)
 
         controller.enqueue(
           encoder.encode(

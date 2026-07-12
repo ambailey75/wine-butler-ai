@@ -1,7 +1,8 @@
 import { z } from 'zod'
 import { anthropic, CLAUDE_MODEL } from '@/lib/ai/client'
 import { IMPORT_TARGET_FIELDS, type ConfidenceScores, type MappedWineData } from './constants'
-import { cleanMappedData } from './clean-field-values'
+import { normalizeWineData } from '@/lib/wines/normalize'
+import { REGION_SUBREGION_PAIRS, COUNTRY_STATE_PAIRS } from '@/lib/wines/region-data'
 
 const WINE_FIELD_PROPERTIES = {
   producer: { type: 'string', description: 'Producer / winery name' },
@@ -115,11 +116,12 @@ function stripPlaceholders(row: ExtractedRow): ExtractedRow {
 }
 
 // Post-processing applied to every row Claude extracts, before the row is
-// handed back to the caller: strip separator artifacts (e.g. "Napa Valley >
-// Spring Mountain") first, then drop placeholder values like "Unknown".
+// handed back to the caller: normalize (split combined values, correct
+// spelling/casing, infer appellation, strip separator artifacts) first, then
+// drop placeholder values like "Unknown".
 function postProcessExtractedRow(row: ExtractedRow): ExtractedRow {
   return stripPlaceholders({
-    mappedData: cleanMappedData(row.mappedData),
+    mappedData: normalizeWineData(row.mappedData),
     confidenceScores: row.confidenceScores,
   })
 }
@@ -134,38 +136,6 @@ function extractToolInput(
 ): unknown {
   const block = message.content.find((b) => b.type === 'tool_use' && b.name === toolName)
   return block?.input
-}
-
-const COUNTRY_STATE_PAIRS: Record<string, string[]> = {
-  'united states': ['california', 'oregon', 'washington', 'new york', 'virginia', 'texas', 'michigan', 'colorado', 'idaho', 'missouri', 'north carolina', 'ohio', 'pennsylvania', 'arizona', 'new mexico', 'maryland', 'georgia', 'illinois', 'indiana', 'iowa', 'minnesota', 'new jersey', 'connecticut', 'massachusetts'],
-  'usa': ['california', 'oregon', 'washington', 'new york', 'virginia', 'texas', 'michigan', 'colorado', 'idaho', 'missouri'],
-  'us': ['california', 'oregon', 'washington', 'new york', 'virginia', 'texas', 'michigan', 'colorado', 'idaho', 'missouri'],
-  'australia': ['south australia', 'victoria', 'new south wales', 'western australia', 'tasmania', 'queensland'],
-  'canada': ['british columbia', 'ontario', 'nova scotia', 'quebec'],
-  'argentina': ['mendoza', 'salta', 'patagonia', 'san juan'],
-  'germany': ['mosel', 'rheingau', 'pfalz', 'rheinhessen', 'baden', 'franken', 'nahe', 'württemberg', 'sachsen'],
-  'italy': ['tuscany', 'piedmont', 'veneto', 'sicily', 'sardinia', 'lombardy', 'friuli', 'campania', 'puglia', 'trentino', 'alto adige', 'abruzzo', 'umbria', 'marche', 'liguria', 'emilia-romagna'],
-  'spain': ['rioja', 'ribera del duero', 'priorat', 'galicia', 'catalonia', 'andalusia', 'castilla y león', 'navarra', 'valencia'],
-  'france': ['bordeaux', 'burgundy', 'champagne', 'rhône', 'loire', 'alsace', 'languedoc', 'provence', 'jura', 'savoie', 'corsica', 'beaujolais'],
-  'new zealand': ['marlborough', 'central otago', 'hawke\'s bay', 'martinborough', 'waiheke island', 'gisborne', 'wairarapa'],
-  'south africa': ['stellenbosch', 'franschhoek', 'paarl', 'swartland', 'constantia', 'walker bay', 'elgin'],
-  'chile': ['maipo valley', 'colchagua', 'casablanca', 'rapel', 'aconcagua', 'bio bio', 'itata'],
-  'portugal': ['douro', 'alentejo', 'dão', 'bairrada', 'vinho verde', 'lisbon'],
-}
-
-const REGION_SUBREGION_PAIRS: Record<string, string[]> = {
-  'napa valley': ['oakville', 'rutherford', 'st. helena', 'stags leap', 'calistoga', 'yountville', 'howell mountain', 'atlas peak', 'spring mountain', 'diamond mountain', 'los carneros', 'mount veeder', 'coombsville', 'chiles valley'],
-  'sonoma': ['russian river valley', 'sonoma coast', 'alexander valley', 'dry creek valley', 'knights valley', 'sonoma mountain', 'sonoma valley', 'bennett valley', 'chalk hill', 'green valley', 'moon mountain', 'petaluma gap', 'pine mountain-cloverdale peak'],
-  'bordeaux': ['pauillac', 'margaux', 'saint-julien', 'saint-estèphe', 'pessac-léognan', 'saint-émilion', 'pomerol', 'médoc', 'haut-médoc', 'graves', 'sauternes', 'barsac', 'entre-deux-mers', 'fronsac', 'côtes de bourg'],
-  'burgundy': ['chablis', 'côte de nuits', 'côte de beaune', 'côte chalonnaise', 'mâconnais', 'gevrey-chambertin', 'vosne-romanée', 'nuits-saint-georges', 'meursault', 'puligny-montrachet', 'chassagne-montrachet', 'pommard', 'volnay', 'beaune', 'corton'],
-  'rhône': ['châteauneuf-du-pape', 'hermitage', 'côte-rôtie', 'gigondas', 'vacqueyras', 'crozes-hermitage', 'saint-joseph', 'condrieu', 'tavel', 'lirac', 'rasteau', 'vinsobres', 'cornas'],
-  'tuscany': ['chianti', 'brunello di montalcino', 'bolgheri', 'montepulciano', 'montalcino', 'san gimignano', 'maremma'],
-  'piedmont': ['barolo', 'barbaresco', 'langhe', 'roero', 'gavi', 'asti', 'alba'],
-  'rioja': ['rioja alta', 'rioja alavesa', 'rioja baja', 'rioja oriental'],
-  'willamette valley': ['dundee hills', 'eola-amity hills', 'yamhill-carlton', 'ribbon ridge', 'chehalem mountains', 'mcminnville'],
-  'russian river valley': ['green valley', 'middle reach', 'east side'],
-  'paso robles': ['adelaida district', 'willow creek', 'templeton gap', 'estrella district', 'geneseo district'],
-  'santa barbara': ['santa ynez valley', 'sta. rita hills', 'happy canyon', 'los olivos district', 'ballard canyon'],
 }
 
 export function detectRegionSplit(

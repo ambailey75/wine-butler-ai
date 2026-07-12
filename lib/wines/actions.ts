@@ -14,6 +14,7 @@ function toWineData(values: WineFormValues) {
     state: values.state ?? null,
     region: values.region ?? null,
     subRegion: values.subRegion ?? null,
+    appellation: values.appellation ?? null,
     vineyard: values.vineyard ?? null,
     classification: values.classification ?? null,
     varietal: values.varietal ?? null,
@@ -88,6 +89,7 @@ export interface WineSuggestion {
   state: string | null
   region: string | null
   subRegion: string | null
+  appellation: string | null
   vineyard: string | null
   classification: string | null
   varietal: string | null
@@ -127,6 +129,7 @@ export async function searchCellarWines(params: {
       state: true,
       region: true,
       subRegion: true,
+      appellation: true,
       vineyard: true,
       classification: true,
       varietal: true,

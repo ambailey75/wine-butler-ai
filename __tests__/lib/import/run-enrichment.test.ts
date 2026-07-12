@@ -17,6 +17,12 @@ jest.mock('@/lib/import/enrich-rating', () => ({
   enrichRatings: (...args: unknown[]) => mockEnrichRatings(...args),
 }))
 
+const mockNormalizeWineData = jest.fn()
+
+jest.mock('@/lib/wines/normalize', () => ({
+  normalizeWineData: (...args: unknown[]) => mockNormalizeWineData(...args),
+}))
+
 function makeRow(mappedData: Record<string, unknown> = {}): EnrichableRow {
   return { mappedData, confidenceScores: {} }
 }
@@ -24,6 +30,7 @@ function makeRow(mappedData: Record<string, unknown> = {}): EnrichableRow {
 describe('runEnrichment', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    mockNormalizeWineData.mockImplementation((mappedData) => mappedData)
     mockEnrichFromStaticDataset.mockImplementation((rows) => rows)
     mockEnrichFromClaude.mockImplementation(async (rows) => rows)
     mockEnrichRatings.mockImplementation(async (rows) => rows)
@@ -37,6 +44,28 @@ describe('runEnrichment', () => {
     expect(mockEnrichFromStaticDataset).toHaveBeenCalledWith(rows, expect.not.arrayContaining(['rating']))
     expect(mockEnrichFromClaude).toHaveBeenCalled()
     expect(mockEnrichRatings).not.toHaveBeenCalled()
+  })
+
+  it('normalizes every row before any enrichment call runs', async () => {
+    const rows = [makeRow({ producer: 'A', wineName: 'B', varietal: 'cab' })]
+    const callOrder: string[] = []
+    mockNormalizeWineData.mockImplementation((mappedData) => {
+      callOrder.push('normalize')
+      return mappedData
+    })
+    mockEnrichFromStaticDataset.mockImplementation((r) => {
+      callOrder.push('static')
+      return r
+    })
+    mockEnrichFromClaude.mockImplementation(async (r) => {
+      callOrder.push('claude')
+      return r
+    })
+
+    await runEnrichment(rows, { layer: 'pre-review' })
+
+    expect(mockNormalizeWineData).toHaveBeenCalledWith(rows[0].mappedData)
+    expect(callOrder).toEqual(['normalize', 'static', 'claude'])
   })
 
   it('runs the rating cascade only when fields includes rating (Layer 2/3)', async () => {

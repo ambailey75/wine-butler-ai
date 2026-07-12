@@ -61,6 +61,7 @@ export interface MappedWineData {
   state?: string
   region?: string
   subRegion?: string
+  appellation?: string
   vineyard?: string
   classification?: string
   varietal?: string
@@ -100,6 +101,7 @@ export const IMPORT_TARGET_FIELDS: ImportTargetField[] = [
   { key: 'state', label: 'State/Province', type: 'string' },
   { key: 'region', label: 'Region', type: 'string' },
   { key: 'subRegion', label: 'Sub-Region', type: 'string' },
+  { key: 'appellation', label: 'Appellation', type: 'string' },
   { key: 'vineyard', label: 'Vineyard', type: 'string' },
   { key: 'classification', label: 'Classification', type: 'string' },
   { key: 'varietal', label: 'Varietal', type: 'string' },
@@ -123,17 +125,19 @@ export const IMPORT_TARGET_FIELDS: ImportTargetField[] = [
 ]
 
 // Extra dropdown synonyms for the column-mapping UI only. Each option maps to
-// an existing IMPORT_TARGET_FIELDS key (e.g. "Appellation" -> subRegion) so
-// users can pick the term their spreadsheet uses without the review table
-// growing a duplicate column for the same underlying field.
+// an existing IMPORT_TARGET_FIELDS key so users can pick the term their
+// spreadsheet uses without the review table growing a duplicate column for
+// the same underlying field. Appellation now has its own dedicated target
+// field (see IMPORT_TARGET_FIELDS above) rather than being a subRegion
+// synonym.
 export interface MappingFieldOption extends ImportTargetField {
   id: string
 }
 
-export const MAPPING_FIELD_OPTIONS: MappingFieldOption[] = [
-  ...IMPORT_TARGET_FIELDS.map((field) => ({ ...field, id: field.key as string })),
-  { id: 'appellation', key: 'subRegion', label: 'Appellation', type: 'string' },
-]
+export const MAPPING_FIELD_OPTIONS: MappingFieldOption[] = IMPORT_TARGET_FIELDS.map((field) => ({
+  ...field,
+  id: field.key as string,
+}))
 
 // Maps common CSV column header variants (normalized: lowercase, alphanumeric
 // only) to a target field key, or `null` to force-skip a computed column.
@@ -143,11 +147,12 @@ export const MAPPING_FIELD_OPTIONS: MappingFieldOption[] = [
 // (computed at query time) are never offered as import targets.
 export const HEADER_ALIASES: Record<string, keyof MappedWineData | null> = {
   notes: 'tastingNotes',
-  appellation: 'subRegion',
-  ava: 'subRegion',
-  doc: 'subRegion',
-  docg: 'subRegion',
-  aoc: 'subRegion',
+  appellation: 'appellation',
+  ava: 'appellation',
+  doc: 'appellation',
+  docg: 'appellation',
+  aoc: 'appellation',
+  doca: 'appellation',
   vineyard: 'vineyard',
   vineyarddesignation: 'vineyard',
   bottlesize: 'format',

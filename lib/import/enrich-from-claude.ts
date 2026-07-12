@@ -2,6 +2,7 @@ import { anthropic, CLAUDE_MODEL } from '@/lib/ai/client'
 import type { MappedWineData } from './constants'
 import type { EnrichableRow } from './enrich-from-static'
 import { ENRICHABLE_FIELDS, NUMERIC_ENRICHABLE_FIELDS, getBlankFields, type EnrichableField } from './enrichable-fields'
+import { normalizeVarietal, normalizeRegionSpelling } from '@/lib/wines/normalize'
 
 function coerce(field: EnrichableField, val: unknown): string | number | undefined {
   if (val === null || val === undefined || val === '') return undefined
@@ -63,8 +64,15 @@ export async function enrichFromClaude(
         const raw = filled[field]
         if (raw === undefined) continue
         if (result[index].mappedData[field as keyof MappedWineData]) continue
-        const val = coerce(field, raw)
+        let val = coerce(field, raw)
         if (val === undefined) continue
+        // Prevent Claude's own phrasing from reintroducing non-standard
+        // spelling/casing even after the upstream normalization pass.
+        if (typeof val === 'string' && (field === 'region' || field === 'subRegion')) {
+          val = normalizeRegionSpelling(val)
+        } else if (typeof val === 'string' && field === 'varietal') {
+          val = normalizeVarietal(val)
+        }
         ;(result[index].mappedData as Record<string, unknown>)[field] = val
         result[index].confidenceScores[field] = 0.75
         result[index].confidenceScores[`_src_${field}`] = 'ai-suggested'

@@ -7,7 +7,7 @@ import { extractWinesFromPdf, extractWinesFromImage, extractWinesFromInvoiceImag
 import { PDF_PAGE_BATCH_SIZE, type MappedWineData } from './constants'
 import { type EnrichableRow } from './enrich-from-static'
 import { runEnrichment } from './run-enrichment'
-import { cleanMappedData } from './clean-field-values'
+import { normalizeWineData } from '@/lib/wines/normalize'
 
 // ENRICHMENT REQUIREMENT: every import path MUST call runEnrichment() before
 // showing the review table (Layer 1) and the confirm route must call it
@@ -106,7 +106,7 @@ async function processPdf(importId: string, buffer: Buffer): Promise<ProcessResu
 
   await prisma.importRow.createMany({
     data: enriched.map((row) => {
-      const mappedData = cleanMappedData(row.mappedData)
+      const mappedData = normalizeWineData(row.mappedData) as MappedWineData
       return {
         importId,
         rawData: mappedData as unknown as Prisma.InputJsonValue,
@@ -193,7 +193,7 @@ async function processImage(importId: string, file: File, isInvoice = false): Pr
 
     await prisma.importRow.createMany({
       data: enrichedHtml.map((row) => {
-        const mappedData = cleanMappedData(row.mappedData)
+        const mappedData = normalizeWineData(row.mappedData) as MappedWineData
         return {
           importId,
           rawData: mappedData as unknown as Prisma.InputJsonValue,
@@ -251,7 +251,7 @@ async function processImage(importId: string, file: File, isInvoice = false): Pr
 
   await prisma.importRow.createMany({
     data: enrichedImageRows.map((row) => {
-      const mappedData = cleanMappedData(row.mappedData)
+      const mappedData = normalizeWineData(row.mappedData) as MappedWineData
       return {
         importId,
         rawData: mappedData as unknown as Prisma.InputJsonValue,

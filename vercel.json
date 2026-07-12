@@ -8,6 +8,10 @@
     {
       "path": "/api/cron/drink-window-check",
       "schedule": "0 14 * * 1"
+    },
+    {
+      "path": "/api/cron/enrich-new-wines",
+      "schedule": "0 3 * * *"
     }
   ]
 }

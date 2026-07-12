@@ -2,6 +2,7 @@ import { enrichFromStaticDataset, type EnrichableRow } from './enrich-from-stati
 import { enrichFromClaude } from './enrich-from-claude'
 import { enrichRatings } from './enrich-rating'
 import { ENRICHABLE_FIELDS, type EnrichableField, type ConfirmEnrichableField } from './enrichable-fields'
+import { normalizeWineData } from '@/lib/wines/normalize'
 
 export type EnrichmentLayer = 'pre-review' | 'pre-confirm' | 'post-confirm'
 
@@ -42,7 +43,14 @@ export async function runEnrichment(
   try {
     const baseFields = fields.filter((f): f is EnrichableField => f !== 'rating')
 
-    let result = enrichFromStaticDataset(rows, baseFields)
+    // Normalize first (fix what we already know), then enrich what's still
+    // blank after normalization.
+    let result = rows.map((row) => ({
+      mappedData: normalizeWineData(row.mappedData),
+      confidenceScores: row.confidenceScores,
+    }))
+
+    result = enrichFromStaticDataset(result, baseFields)
     result = await enrichFromClaudeChunked(result, baseFields)
 
     if (fields.includes('rating')) {

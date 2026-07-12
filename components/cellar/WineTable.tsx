@@ -18,6 +18,7 @@ import {
 import { ArrowUpDown, Check, Eye, GlassWater, MoreHorizontal, Pencil, Trash2 } from 'lucide-react'
 import type { SerializedWine } from '@/lib/wines/queries'
 import { getEstimatedValue } from '@/lib/wines/queries'
+import { normalizeRegionSpelling } from '@/lib/wines/normalize'
 import {
   Table,
   TableBody,
@@ -45,6 +46,7 @@ const STYLE_OPTIONS = ['Red', 'White', 'Rosé', 'Sparkling', 'Dessert', 'Fortifi
 const DEFAULT_COLUMN_VISIBILITY: VisibilityState = {
   subRegion: false,
   countryState: false,
+  appellation: false,
   vineyard: false,
   totalCost: false,
   format: false,
@@ -766,6 +768,18 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
         cell: () => null,
       },
       {
+        accessorKey: 'appellation',
+        header: ({ column }) => <SortHeader column={column} label="Appellation" />,
+        cell: ({ row }) => (
+          <TextEditCell
+            value={row.original.appellation}
+            wineId={row.original.id} field="appellation"
+            editing={editing} savedCell={savedCell}
+            onStart={startEditWithDismiss} onSave={saveField} onCancel={cancelEdit}
+          />
+        ),
+      },
+      {
         accessorKey: 'varietal',
         header: ({ column }) => <SortHeader column={column} label="Varietal" />,
         cell: ({ row }) => (
@@ -1034,8 +1048,11 @@ export function WineTable({ wines: initialWines }: { wines: SerializedWine[] }) 
       if (wine.country) countryStates.add(wine.country)
       if (wine.state) countryStates.add(wine.state)
       if (wine.producer) producers.add(wine.producer)
-      if (wine.region) regions.add(wine.region)
-      if (wine.subRegion) subRegions.add(wine.subRegion)
+      // Safety net: data written before normalization shipped, or edited
+      // directly via the inline TextEditCell (which bypasses the import
+      // pipeline), may still hold unnormalized spelling/casing.
+      if (wine.region) regions.add(normalizeRegionSpelling(wine.region))
+      if (wine.subRegion) subRegions.add(normalizeRegionSpelling(wine.subRegion))
       if (wine.varietal) varietals.add(wine.varietal)
       if (wine.vintage) vintages.add(wine.vintage)
     }

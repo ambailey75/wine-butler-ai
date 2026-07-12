@@ -101,6 +101,19 @@ export function ImportRowTable({ importId, rows, isHistoricalImport }: ImportRow
     return ids
   }, [rowsState])
 
+  // Vintage is never required and never blocks import — this is purely
+  // informational, since the app can't reliably guess a missing vintage.
+  const missingVintageRowIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const row of rowsState) {
+      if (row.status === 'SKIPPED') continue
+      if (!row.mappedData.vintage) {
+        ids.add(row.id)
+      }
+    }
+    return ids
+  }, [rowsState])
+
   async function patchRow(rowId: string, body: { mappedData?: MappedWineData; status?: ImportRowStatus }) {
     await fetch(`/api/import/${importId}/rows/${rowId}`, {
       method: 'PATCH',
@@ -284,6 +297,16 @@ export function ImportRowTable({ importId, rows, isHistoricalImport }: ImportRow
         </div>
       )}
 
+      {missingVintageRowIds.size > 3 && (
+        <div className="flex items-start gap-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>
+            {missingVintageRowIds.size} wines are missing a vintage year — vintage cannot be
+            auto-filled. Please add it manually before or after import.
+          </p>
+        </div>
+      )}
+
       <div className="overflow-x-auto rounded-md border border-border">
         <Table>
           <TableHeader>
@@ -422,9 +445,21 @@ export function ImportRowTable({ importId, rows, isHistoricalImport }: ImportRow
                     </Tooltip>
                   ) : input
 
+                  const isMissingVintage = field.key === 'vintage' && missingVintageRowIds.has(row.id)
+
                   return (
                     <TableCell key={field.key}>
-                      {badgeLabel ? (
+                      {isMissingVintage ? (
+                        <div className="flex items-center gap-1">
+                          {inputWithTooltip}
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                            </TooltipTrigger>
+                            <TooltipContent>Vintage is missing and can&apos;t be auto-filled</TooltipContent>
+                          </Tooltip>
+                        </div>
+                      ) : badgeLabel ? (
                         <div className="flex flex-col gap-1">
                           {inputWithTooltip}
                           <Tooltip>

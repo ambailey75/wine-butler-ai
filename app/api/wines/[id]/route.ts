@@ -15,6 +15,7 @@ const patchSchema = z.object({
   state: z.string().trim().nullable().optional(),
   region: z.string().trim().nullable().optional(),
   subRegion: z.string().trim().nullable().optional(),
+  appellation: z.string().trim().nullable().optional(),
   vineyard: z.string().trim().nullable().optional(),
   varietal: z.string().trim().nullable().optional(),
   format: z.string().trim().nullable().optional(),

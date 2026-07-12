@@ -231,6 +231,7 @@ interface MergedSuggestion {
   state: string | null
   region: string | null
   subRegion: string | null
+  appellation: string | null
   vineyard: string | null
   classification: string | null
   varietal: string | null
@@ -242,11 +243,11 @@ function fromCellar(suggestion: WineSuggestion): MergedSuggestion {
 }
 
 function fromStatic(entry: StaticWineEntry): MergedSuggestion {
-  return { source: 'static', vintage: null, ...entry }
+  return { source: 'static', vintage: null, appellation: null, ...entry }
 }
 
 function fromApi(result: WineLookupResult): MergedSuggestion {
-  return { source: 'api', state: null, subRegion: null, vineyard: null, classification: null, format: null, ...result }
+  return { source: 'api', state: null, subRegion: null, appellation: null, vineyard: null, classification: null, format: null, ...result }
 }
 
 function mergeSuggestions(...lists: MergedSuggestion[][]): MergedSuggestion[] {
@@ -307,6 +308,7 @@ export function WineForm({ mode, wine, existingRegions, existingVarietals, prefi
           state: wine.state ?? undefined,
           region: wine.region ?? undefined,
           subRegion: wine.subRegion ?? undefined,
+          appellation: wine.appellation ?? undefined,
           vineyard: wine.vineyard ?? undefined,
           classification: wine.classification ?? undefined,
           varietal: wine.varietal ?? undefined,
@@ -412,6 +414,7 @@ export function WineForm({ mode, wine, existingRegions, existingVarietals, prefi
     if (suggestion.state) form.setValue('state', suggestion.state)
     if (suggestion.region) form.setValue('region', suggestion.region)
     if (suggestion.subRegion) form.setValue('subRegion', suggestion.subRegion)
+    if (suggestion.appellation) form.setValue('appellation', suggestion.appellation)
     if (suggestion.vineyard) form.setValue('vineyard', suggestion.vineyard)
     if (suggestion.classification) form.setValue('classification', suggestion.classification)
     if (suggestion.varietal) form.setValue('varietal', suggestion.varietal)
@@ -685,6 +688,23 @@ export function WineForm({ mode, wine, existingRegions, existingVarietals, prefi
                     options={regionOptions}
                     placeholder="Select or type a sub-region"
                   />
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="appellation"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Appellation</FormLabel>
+                  <FormControl>
+                    <Input
+                      placeholder="e.g. Stags Leap District AVA, Châteauneuf-du-Pape AOC"
+                      {...field}
+                      value={field.value ?? ''}
+                    />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )}

@@ -144,6 +144,7 @@ export default async function WineDetailPage({ params }: WineDetailPageProps) {
           <DetailField label="State/Province" value={wine.state} />
           <DetailField label="Region" value={wine.region} />
           <DetailField label="Sub-Region" value={wine.subRegion} />
+          <DetailField label="Appellation" value={wine.appellation} />
           <DetailField label="Vineyard" value={wine.vineyard} />
           <DetailField label="Classification" value={wine.classification} />
           <DetailField label="Varietal" value={wine.varietal} />
