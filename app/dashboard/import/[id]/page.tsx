@@ -3,7 +3,7 @@ import { notFound, redirect } from 'next/navigation'
 import { ArrowLeft, Clock, Users } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth/current-user'
 import { getImport } from '@/lib/import/queries'
-import { findDuplicates } from '@/lib/import/duplicate-detector'
+import { findMergeMatches } from '@/lib/import/find-merge-match'
 import { type MappedWineData } from '@/lib/import/constants'
 import { ImportStatusBadge } from '@/components/import/ImportStatusBadge'
 import { ImportReview } from '@/components/import/ImportReview'
@@ -27,7 +27,9 @@ export default async function ImportReviewPage({ params, searchParams }: ImportR
   const candidates = importRecord.rows.map(
     (row) => (row.mappedData ?? {}) as unknown as MappedWineData
   )
-  const duplicates = await findDuplicates(user.id, candidates)
+  const mergeOutcomes = await findMergeMatches(user.id, candidates)
+  const mergeMatchCount = mergeOutcomes.filter((o) => o.type !== 'new').length
+  const showMergeBanner = importRecord.rows.length > 0 && mergeMatchCount / importRecord.rows.length > 0.5
 
   const rows = importRecord.rows.map((row, index) => {
     const scores = (row.confidenceScores ?? {}) as Record<string, unknown>
@@ -37,7 +39,7 @@ export default async function ImportReviewPage({ params, searchParams }: ImportR
         enrichedSources[key.slice(5)] = val
       }
     }
-    return { ...row, duplicateOf: duplicates[index], enrichedSources }
+    return { ...row, mergeOutcome: mergeOutcomes[index], enrichedSources }
   })
 
   const mappingParam = searchParams.mapping
@@ -112,7 +114,17 @@ export default async function ImportReviewPage({ params, searchParams }: ImportR
         </div>
       )}
 
-      <ImportReview importRecord={importRecord} rows={rows} mappingSuggestion={mappingSuggestion} regionSplitColumns={regionSplitColumns} countryStateSplitColumns={countryStateSplitColumns} isHistoricalImport={importRecord.isHistoricalImport} />
+      <ImportReview
+        importRecord={importRecord}
+        rows={rows}
+        mappingSuggestion={mappingSuggestion}
+        regionSplitColumns={regionSplitColumns}
+        countryStateSplitColumns={countryStateSplitColumns}
+        isHistoricalImport={importRecord.isHistoricalImport}
+        showMergeBanner={showMergeBanner}
+        mergeMatchCount={mergeMatchCount}
+        totalRowCount={importRecord.rows.length}
+      />
     </div>
   )
 }

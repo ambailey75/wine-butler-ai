@@ -6,6 +6,18 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { getImport } from '@/lib/import/queries'
 import { IMPORTS_BUCKET, LABELS_BUCKET, type MappedWineData } from '@/lib/import/constants'
 import { inferStyle } from '@/lib/wines/inferStyle'
+import { runEnrichment } from '@/lib/import/run-enrichment'
+import { CONFIRM_ENRICHABLE_FIELDS } from '@/lib/import/enrichable-fields'
+import { findMergeMatches, type MergeOutcome, type ExistingWineSnapshot } from '@/lib/import/find-merge-match'
+import type { EnrichableRow } from '@/lib/import/enrich-from-static'
+
+// ENRICHMENT REQUIREMENT: this route is both Layer 2 (pre-confirm safety
+// net) and Layer 3 (post-confirm background pass). Every row must be run
+// through runEnrichment() before a Wine record is created or updated — see
+// lib/import/run-enrichment.ts. This route also owns reconciliation
+// (lib/import/find-merge-match.ts): a row matching an existing cellar wine
+// must merge into it (add quantity, fill blanks) rather than create a
+// duplicate Wine row.
 
 export const maxDuration = 60
 
@@ -29,6 +41,10 @@ const OPTIONAL_NUMERIC_FIELDS = [
   'drinkWindowEnd',
   'vintage',
 ] as const
+
+// Subset of the merge blank-fill diff that's Decimal/Int-backed and so can
+// hit the same 22003 overflow on an update.
+const MERGE_OPTIONAL_NUMERIC_FIELDS = ['rating', 'purchasePrice', 'currentEstValue', 'drinkWindowStart', 'drinkWindowEnd'] as const
 
 function isNumericOverflowError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err)
@@ -175,6 +191,108 @@ async function createWineWithFallback(
   }
 }
 
+// Builds the blank-fill diff for a merge: only fields that are null/blank on
+// the existing wine get set, from the (already-enriched) imported row.
+// Existing non-null values are never overwritten. storageLocation is set
+// explicitly when the caller resolved a 'needs-decision' row to merge
+// (setLocation), otherwise it follows the same blank-fill rule as everything
+// else. Wine.notes is deliberately excluded — reserved for the fallback note.
+function buildMergeDiff(
+  existing: ExistingWineSnapshot,
+  mapped: MappedWineData,
+  setLocation?: string
+): Record<string, unknown> {
+  const diff: Record<string, unknown> = {}
+
+  const fillIfBlank = (key: keyof ExistingWineSnapshot, value: unknown) => {
+    const current = existing[key]
+    const isBlank = current == null || current === ''
+    if (isBlank && value != null && value !== '') {
+      diff[key] = value
+    }
+  }
+
+  fillIfBlank('country', mapped.country)
+  fillIfBlank('state', mapped.state)
+  fillIfBlank('region', mapped.region)
+  fillIfBlank('subRegion', mapped.subRegion)
+  fillIfBlank('vineyard', mapped.vineyard)
+  fillIfBlank('classification', mapped.classification)
+  fillIfBlank('varietal', mapped.varietal)
+  fillIfBlank('style', mapped.style)
+  fillIfBlank('rating', mapped.rating)
+  fillIfBlank('drinkWindowStart', mapped.drinkWindowStart)
+  fillIfBlank('drinkWindowEnd', mapped.drinkWindowEnd)
+  fillIfBlank('tastingNotes', mapped.tastingNotes)
+  fillIfBlank('pairingNotes', mapped.pairingNotes)
+  fillIfBlank('purchasePrice', mapped.purchasePrice)
+  fillIfBlank('currentEstValue', mapped.currentEstValue)
+  fillIfBlank('vendor', mapped.vendor)
+
+  if (mapped.purchaseDate) {
+    const parsed = new Date(mapped.purchaseDate)
+    if (!Number.isNaN(parsed.getTime())) {
+      fillIfBlank('purchaseDate', parsed)
+    }
+  }
+
+  if (setLocation) {
+    diff.storageLocation = setLocation
+  } else {
+    fillIfBlank('storageLocation', mapped.storageLocation)
+  }
+
+  return diff
+}
+
+interface MergeResult {
+  wineId: string
+  quantityAdded: number
+}
+
+interface MergeTarget {
+  wineId: string
+  existing: ExistingWineSnapshot
+}
+
+// Merges an imported row into an existing wine: adds quantity, fills blanks,
+// never overwrites. On a numeric overflow, drops the optional numeric fields
+// from the diff and retries — the quantity/text fields always land even if
+// a bad numeric value has to be dropped. Never marks the row Skipped.
+// Accepts both the 'merge' and 'needs-decision' (resolved-to-merge) outcome
+// shapes — both carry wineId/existing, only needs-decision has an
+// importedLocation the caller may pass through as setLocation.
+async function mergeIntoExistingWine(
+  target: MergeTarget,
+  mapped: MappedWineData,
+  quantityToAdd: number,
+  isConsumed: boolean,
+  setLocation?: string
+): Promise<MergeResult> {
+  const diff = buildMergeDiff(target.existing, mapped, setLocation)
+  const newQuantity = target.existing.quantity + quantityToAdd
+
+  const data: Record<string, unknown> = { quantity: newQuantity, ...diff }
+
+  if (isConsumed) {
+    const newConsumedQuantity = target.existing.consumedQuantity + quantityToAdd
+    data.consumedQuantity = newConsumedQuantity
+    data.isFullyConsumed = newConsumedQuantity >= newQuantity
+  }
+
+  try {
+    await prisma.wine.update({ where: { id: target.wineId }, data })
+  } catch (err) {
+    if (!isNumericOverflowError(err)) throw err
+    for (const field of MERGE_OPTIONAL_NUMERIC_FIELDS) {
+      delete data[field]
+    }
+    await prisma.wine.update({ where: { id: target.wineId }, data })
+  }
+
+  return { wineId: target.wineId, quantityAdded: quantityToAdd }
+}
+
 async function copyLabelPhoto(userId: string, sourcePath: string): Promise<string | null> {
   const supabase = createAdminClient()
 
@@ -206,6 +324,72 @@ async function copyLabelPhoto(userId: string, sourcePath: string): Promise<strin
 
   const { data } = supabase.storage.from(LABELS_BUCKET).getPublicUrl(labelPath)
   return data.publicUrl
+}
+
+// Layer 3 — post-confirm background enrichment. Runs detached (not awaited
+// by the route's response) so it never blocks the client, with its own hard
+// timeout since Vercel can freeze the function shortly after the response
+// fully flushes — a cut-off run just leaves a wine's blanks as-is, no
+// corruption, and failures are log-only by design either way.
+const LAYER_3_TIMEOUT_MS = 15000
+
+function runLayer3InBackground(wineIds: string[]) {
+  if (wineIds.length === 0) return
+
+  const work = async () => {
+    const wines = await prisma.wine.findMany({ where: { id: { in: wineIds } } })
+    const rows: EnrichableRow[] = wines.map((w) => ({
+      mappedData: {
+        country: w.country ?? undefined,
+        state: w.state ?? undefined,
+        region: w.region ?? undefined,
+        subRegion: w.subRegion ?? undefined,
+        vineyard: w.vineyard ?? undefined,
+        classification: w.classification ?? undefined,
+        varietal: w.varietal ?? undefined,
+        style: w.style ?? undefined,
+        drinkWindowStart: w.drinkWindowStart ?? undefined,
+        drinkWindowEnd: w.drinkWindowEnd ?? undefined,
+        rating: w.rating ? w.rating.toNumber() : undefined,
+      },
+      confidenceScores: {},
+    }))
+
+    const enriched = await runEnrichment(rows, { layer: 'post-confirm', fields: CONFIRM_ENRICHABLE_FIELDS })
+
+    await Promise.allSettled(
+      enriched.map((row, i) => {
+        const wine = wines[i]
+        const data: Record<string, unknown> = {}
+        for (const field of CONFIRM_ENRICHABLE_FIELDS) {
+          const value = (row.mappedData as Record<string, unknown>)[field]
+          if (value != null && (wine as Record<string, unknown>)[field] == null) {
+            data[field] = value
+          }
+        }
+        if (Object.keys(data).length === 0) return Promise.resolve()
+        return prisma.wine.update({ where: { id: wine.id }, data }).catch((err) => {
+          console.error('[import confirm] Layer 3 background enrichment failed for wine', wine.id, err)
+        })
+      })
+    )
+  }
+
+  setImmediate(() => {
+    let timeoutId: ReturnType<typeof setTimeout>
+    const timeout = new Promise((resolve) => {
+      timeoutId = setTimeout(resolve, LAYER_3_TIMEOUT_MS)
+      // Never let this timer keep the process alive — Layer 3 is best-effort
+      // background work, not something that should block a clean shutdown.
+      timeoutId.unref?.()
+    })
+
+    Promise.race([work(), timeout])
+      .catch((err) => {
+        console.error('[import confirm] Layer 3 background enrichment errored', err)
+      })
+      .finally(() => clearTimeout(timeoutId))
+  })
 }
 
 export async function POST(request: Request, { params }: RouteParams) {
@@ -320,10 +504,14 @@ export async function POST(request: Request, { params }: RouteParams) {
   }
 
   let consumedRowIds: Set<string> = new Set()
+  let locationDecisions: Record<string, 'merge' | 'separate'> = {}
   try {
     const body = await request.json().catch(() => ({}))
     if (Array.isArray(body?.consumedRowIds)) {
       consumedRowIds = new Set(body.consumedRowIds as string[])
+    }
+    if (body?.locationDecisions && typeof body.locationDecisions === 'object') {
+      locationDecisions = body.locationDecisions
     }
   } catch {
     // No body or invalid JSON is fine -- defaults to no consumed rows
@@ -343,6 +531,36 @@ export async function POST(request: Request, { params }: RouteParams) {
     labelPhotoUrl = await copyLabelPhoto(user.id, importRecord.storagePath)
   }
 
+  // Layer 2 — pre-confirm enrichment safety net, one batched call for the
+  // whole run (not per-row) to stay inside maxDuration.
+  const enrichableRows: EnrichableRow[] = rowsToImport.map((row) => ({
+    mappedData: (row.mappedData ?? {}) as unknown as MappedWineData,
+    confidenceScores: (row.confidenceScores ?? {}) as unknown as Record<string, unknown>,
+  }))
+  const enrichedRows = await runEnrichment(enrichableRows, {
+    layer: 'pre-confirm',
+    fields: CONFIRM_ENRICHABLE_FIELDS,
+  })
+
+  // Reconciliation match-check, once for the whole batch, against the
+  // (now-enriched) mapped data.
+  const outcomes = await findMergeMatches(user.id, enrichedRows.map((r) => r.mappedData))
+
+  // Resolve 'needs-decision' rows to an effective merge-or-new outcome using
+  // the client's choice, defaulting to 'separate' (safe, non-destructive)
+  // when a decision wasn't provided.
+  const resolvedOutcomes: Array<{ outcome: MergeOutcome; effectiveType: 'new' | 'merge'; setLocation?: string }> =
+    rowsToImport.map((row, i) => {
+      const outcome = outcomes[i]
+      if (outcome.type === 'merge') return { outcome, effectiveType: 'merge' as const }
+      if (outcome.type === 'new') return { outcome, effectiveType: 'new' as const }
+      const decision = locationDecisions[row.id]
+      if (decision === 'merge') {
+        return { outcome, effectiveType: 'merge' as const, setLocation: outcome.importedLocation }
+      }
+      return { outcome, effectiveType: 'new' as const }
+    })
+
   const encoder = new TextEncoder()
   const stream = new ReadableStream({
     async start(controller) {
@@ -353,19 +571,59 @@ export async function POST(request: Request, { params }: RouteParams) {
       }
 
       let totalImported = 0
+      let totalMerged = 0
       let totalFallback = 0
       let totalFailed = 0
       const rowErrors: Array<{ rowId: string; producer?: string; wineName?: string; error: string }> = []
+      const newlyCreatedWineIds: string[] = []
+
+      type RowOutcome = { merged: true; usedFallback: false } | { merged: false; usedFallback: boolean; wineId: string }
 
       try {
         for (let i = 0; i < rowsToImport.length; i += BATCH_SIZE) {
           const batch = rowsToImport.slice(i, i + BATCH_SIZE)
 
           const results = await Promise.allSettled(
-            batch.map(async (row) => {
-              const mapped = clampNumericFields((row.mappedData ?? {}) as unknown as MappedWineData)
+            batch.map(async (row, batchIdx): Promise<RowOutcome> => {
+              const globalIdx = i + batchIdx
+              const mapped = clampNumericFields(enrichedRows[globalIdx].mappedData)
               const isConsumed = consumedRowIds.has(row.id)
               const quantity = mapped.quantity && mapped.quantity > 0 ? Math.round(mapped.quantity) : 1
+              const resolved = resolvedOutcomes[globalIdx]
+
+              if (resolved.effectiveType === 'merge' && resolved.outcome.type !== 'new') {
+                const { wineId } = await mergeIntoExistingWine(
+                  { wineId: resolved.outcome.wineId, existing: resolved.outcome.existing },
+                  mapped,
+                  quantity,
+                  isConsumed,
+                  resolved.setLocation
+                )
+
+                if (isConsumed) {
+                  await prisma.consumptionLog.create({
+                    data: {
+                      wineId,
+                      userId: user.id,
+                      quantity,
+                      consumedDate: historicalDate,
+                      occasion: 'Historical import',
+                      notes: 'Imported from historical collection',
+                    },
+                  })
+                }
+
+                await prisma.importRow.update({
+                  where: { id: row.id },
+                  data: {
+                    status: 'CONFIRMED',
+                    wineId,
+                    reviewNotes: 'Merged with existing wine — quantity updated, blank fields filled in',
+                  },
+                })
+
+                return { merged: true, usedFallback: false }
+              }
 
               const { wine, note } = await createWineWithFallback(
                 {
@@ -403,7 +661,7 @@ export async function POST(request: Request, { params }: RouteParams) {
                 })
               }
 
-              return { usedFallback: !!note }
+              return { merged: false, usedFallback: !!note, wineId: wine.id }
             })
           )
 
@@ -413,7 +671,12 @@ export async function POST(request: Request, { params }: RouteParams) {
 
             if (outcome.status === 'fulfilled') {
               totalImported++
-              if (outcome.value.usedFallback) totalFallback++
+              if (outcome.value.merged) {
+                totalMerged++
+              } else {
+                if (outcome.value.usedFallback) totalFallback++
+                newlyCreatedWineIds.push(outcome.value.wineId)
+              }
               continue
             }
 
@@ -444,11 +707,15 @@ export async function POST(request: Request, { params }: RouteParams) {
           },
         })
 
+        // Layer 3 — fire-and-forget, does not block this response.
+        runLayer3InBackground(newlyCreatedWineIds)
+
         controller.enqueue(
           encoder.encode(
             JSON.stringify({
               type: 'complete',
               imported: totalImported,
+              merged: totalMerged,
               skipped: skippedRows.length,
               fallback: totalFallback,
               failed: totalFailed,

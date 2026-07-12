@@ -22,8 +22,23 @@ jest.mock('next/cache', () => ({
   revalidatePath: jest.fn(),
 }))
 
+// Enrichment/reconciliation are pure pass-through by default in these tests
+// (identity for enrichment, "no match" for every row) — dedicated behavior
+// for each lives in run-enrichment.test.ts / find-merge-match.test.ts. This
+// keeps these tests decoupled from real Anthropic/Vivino calls.
+jest.mock('@/lib/import/run-enrichment', () => ({
+  runEnrichment: jest.fn(async (rows: unknown) => rows),
+}))
+
+jest.mock('@/lib/import/find-merge-match', () => ({
+  findMergeMatches: jest.fn(async (_userId: string, candidates: unknown[]) =>
+    candidates.map(() => ({ type: 'new' }))
+  ),
+}))
+
 const mockCreate = jest.fn()
 const mockWineUpdate = jest.fn()
+const mockWineFindMany = jest.fn()
 const mockImportRowUpdate = jest.fn()
 const mockImportUpdate = jest.fn()
 const mockConsumptionLogCreate = jest.fn()
@@ -33,6 +48,7 @@ jest.mock('@/lib/prisma/client', () => ({
     wine: {
       create: (...args: unknown[]) => mockCreate(...args),
       update: (...args: unknown[]) => mockWineUpdate(...args),
+      findMany: (...args: unknown[]) => mockWineFindMany(...args),
     },
     importRow: {
       update: (...args: unknown[]) => mockImportRowUpdate(...args),
@@ -51,6 +67,12 @@ const { getCurrentUser } = jest.requireMock('@/lib/auth/current-user') as {
 }
 const { getImport } = jest.requireMock('@/lib/import/queries') as {
   getImport: jest.Mock
+}
+const { runEnrichment } = jest.requireMock('@/lib/import/run-enrichment') as {
+  runEnrichment: jest.Mock
+}
+const { findMergeMatches } = jest.requireMock('@/lib/import/find-merge-match') as {
+  findMergeMatches: jest.Mock
 }
 
 const mockUser = { id: 'user-123', email: 'test@example.com' }
@@ -83,6 +105,36 @@ function overflowError() {
   return new Error('numeric field overflow (22003)')
 }
 
+function makeExistingSnapshot(overrides: Record<string, unknown> = {}) {
+  return {
+    quantity: 6,
+    consumedQuantity: 0,
+    isFullyConsumed: false,
+    storageLocation: null,
+    country: null,
+    state: null,
+    region: null,
+    subRegion: null,
+    vineyard: null,
+    classification: null,
+    varietal: null,
+    style: null,
+    format: null,
+    vendor: null,
+    purchasePrice: null,
+    purchaseDate: null,
+    currentEstValue: null,
+    totalCostOverride: null,
+    totalValueOverride: null,
+    rating: null,
+    drinkWindowStart: null,
+    drinkWindowEnd: null,
+    tastingNotes: null,
+    pairingNotes: null,
+    ...overrides,
+  }
+}
+
 async function readStream(response: Response): Promise<unknown[]> {
   const text = await response.text()
   return text
@@ -102,6 +154,7 @@ describe('POST /api/import/[id]/confirm', () => {
       ...data,
     }))
     mockWineUpdate.mockResolvedValue({})
+    mockWineFindMany.mockResolvedValue([])
     mockImportRowUpdate.mockResolvedValue({})
     mockImportUpdate.mockResolvedValue({})
     mockConsumptionLogCreate.mockResolvedValue({})
@@ -456,5 +509,114 @@ describe('POST /api/import/[id]/confirm', () => {
     expect(events).toContainEqual(
       expect.objectContaining({ type: 'complete', imported: 1 })
     )
+  })
+
+  it('merges into an existing wine instead of creating a duplicate, adding quantity and filling blanks without overwriting', async () => {
+    const rows = [
+      makeRow('row-1', 'PENDING', {
+        producer: 'Opus One',
+        wineName: 'Opus One',
+        vintage: 2019,
+        quantity: 3,
+        region: 'Napa Valley',
+        country: 'United States',
+      }),
+    ]
+    getCurrentUser.mockResolvedValue(mockUser)
+    getImport.mockResolvedValue(makeImportRecord({ rows }))
+    findMergeMatches.mockResolvedValueOnce([
+      {
+        type: 'merge',
+        wineId: 'existing-wine-1',
+        label: 'Opus One Opus One (2019)',
+        existing: makeExistingSnapshot({ quantity: 6, region: null, country: 'United States' }),
+      },
+    ])
+
+    const response = await POST(new Request('http://localhost'), makeParams('import-1'))
+    const events = await readStream(response)
+
+    expect(mockCreate).not.toHaveBeenCalled()
+    expect(mockWineUpdate).toHaveBeenCalledWith({
+      where: { id: 'existing-wine-1' },
+      data: expect.objectContaining({ quantity: 9, region: 'Napa Valley' }),
+    })
+    // country was already set on the existing wine — must never be overwritten
+    const updateData = mockWineUpdate.mock.calls[0][0].data
+    expect(updateData).not.toHaveProperty('country')
+
+    expect(mockImportRowUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'row-1' },
+        data: expect.objectContaining({
+          status: 'CONFIRMED',
+          wineId: 'existing-wine-1',
+          reviewNotes: 'Merged with existing wine — quantity updated, blank fields filled in',
+        }),
+      })
+    )
+
+    const complete = events.find((e) => (e as { type: string }).type === 'complete') as {
+      imported: number
+      merged: number
+    }
+    expect(complete.imported).toBe(1)
+    expect(complete.merged).toBe(1)
+  })
+
+  it('defaults a needs-decision row to separate (creates new) when the client sends no location decision', async () => {
+    const rows = [makeRow('row-1', 'PENDING', { producer: 'A', wineName: 'B', storageLocation: 'Rack 2' })]
+    getCurrentUser.mockResolvedValue(mockUser)
+    getImport.mockResolvedValue(makeImportRecord({ rows }))
+    findMergeMatches.mockResolvedValueOnce([
+      {
+        type: 'needs-decision',
+        wineId: 'existing-wine-1',
+        label: 'A B',
+        existing: makeExistingSnapshot(),
+        importedLocation: 'Rack 2',
+      },
+    ])
+
+    const response = await POST(new Request('http://localhost'), makeParams('import-1'))
+    await readStream(response)
+
+    expect(mockWineUpdate).not.toHaveBeenCalled()
+    expect(mockCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ producer: 'A', wineName: 'B' }),
+    })
+  })
+
+  it('merges a needs-decision row and sets storageLocation when the client explicitly chooses to merge', async () => {
+    const rows = [
+      makeRow('row-1', 'PENDING', { producer: 'A', wineName: 'B', quantity: 2, storageLocation: 'Rack 2' }),
+    ]
+    getCurrentUser.mockResolvedValue(mockUser)
+    getImport.mockResolvedValue(makeImportRecord({ rows }))
+    findMergeMatches.mockResolvedValueOnce([
+      {
+        type: 'needs-decision',
+        wineId: 'existing-wine-1',
+        label: 'A B',
+        existing: makeExistingSnapshot({ quantity: 1 }),
+        importedLocation: 'Rack 2',
+      },
+    ])
+
+    const response = await POST(
+      new Request('http://localhost', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ locationDecisions: { 'row-1': 'merge' } }),
+      }),
+      makeParams('import-1')
+    )
+    await readStream(response)
+
+    expect(mockCreate).not.toHaveBeenCalled()
+    expect(mockWineUpdate).toHaveBeenCalledWith({
+      where: { id: 'existing-wine-1' },
+      data: expect.objectContaining({ quantity: 3, storageLocation: 'Rack 2' }),
+    })
   })
 })

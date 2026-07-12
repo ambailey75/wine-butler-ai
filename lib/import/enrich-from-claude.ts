@@ -1,31 +1,23 @@
 import { anthropic, CLAUDE_MODEL } from '@/lib/ai/client'
 import type { MappedWineData } from './constants'
 import type { EnrichableRow } from './enrich-from-static'
-
-const ENRICHABLE_FIELDS = [
-  'country', 'state', 'region', 'subRegion', 'varietal',
-  'style', 'drinkWindowStart', 'drinkWindowEnd', 'classification', 'vineyard',
-] as const
-
-type EnrichableField = (typeof ENRICHABLE_FIELDS)[number]
-const NUMERIC_FIELDS = new Set<EnrichableField>(['drinkWindowStart', 'drinkWindowEnd'])
-
-function getBlankFields(data: MappedWineData): EnrichableField[] {
-  return ENRICHABLE_FIELDS.filter((f) => !data[f as keyof MappedWineData])
-}
+import { ENRICHABLE_FIELDS, NUMERIC_ENRICHABLE_FIELDS, getBlankFields, type EnrichableField } from './enrichable-fields'
 
 function coerce(field: EnrichableField, val: unknown): string | number | undefined {
   if (val === null || val === undefined || val === '') return undefined
-  if (NUMERIC_FIELDS.has(field)) {
+  if (NUMERIC_ENRICHABLE_FIELDS.has(field)) {
     const n = typeof val === 'number' ? val : parseInt(String(val), 10)
     return Number.isNaN(n) ? undefined : n
   }
   return typeof val === 'string' ? val : String(val)
 }
 
-export async function enrichFromClaude(rows: EnrichableRow[]): Promise<EnrichableRow[]> {
+export async function enrichFromClaude(
+  rows: EnrichableRow[],
+  fields: readonly EnrichableField[] = ENRICHABLE_FIELDS
+): Promise<EnrichableRow[]> {
   const needsEnrichment = rows
-    .map((row, i) => ({ i, row, blanks: getBlankFields(row.mappedData) }))
+    .map((row, i) => ({ i, row, blanks: getBlankFields(row.mappedData, fields) }))
     .filter(({ blanks }) => blanks.length > 0)
 
   if (!needsEnrichment.length) return rows
@@ -67,7 +59,7 @@ export async function enrichFromClaude(rows: EnrichableRow[]): Promise<Enrichabl
 
     for (const { index, filled } of parsed) {
       if (index < 0 || index >= result.length) continue
-      for (const field of ENRICHABLE_FIELDS) {
+      for (const field of fields) {
         const raw = filled[field]
         if (raw === undefined) continue
         if (result[index].mappedData[field as keyof MappedWineData]) continue

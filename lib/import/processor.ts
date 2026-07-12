@@ -5,9 +5,18 @@ import { extractPdfPages } from './pdf'
 import { fileToBase64 } from './image'
 import { extractWinesFromPdf, extractWinesFromImage, extractWinesFromInvoiceImage, extractWinesFromText, suggestColumnMapping } from './claude-extractor'
 import { PDF_PAGE_BATCH_SIZE, type MappedWineData } from './constants'
-import { enrichFromStaticDataset, type EnrichableRow } from './enrich-from-static'
-import { enrichFromClaude } from './enrich-from-claude'
+import { type EnrichableRow } from './enrich-from-static'
+import { runEnrichment } from './run-enrichment'
 import { cleanMappedData } from './clean-field-values'
+
+// ENRICHMENT REQUIREMENT: every import path MUST call runEnrichment() before
+// showing the review table (Layer 1) and the confirm route must call it
+// again before writing to the database (Layer 2). Do not add a new import
+// path without adding enrichment. See lib/import/run-enrichment.ts.
+//
+// processSpreadsheet does NOT call it here — mappedData doesn't exist until
+// the user submits column mapping, so that path's Layer 1 call lives in
+// app/api/import/[id]/mapping/route.ts instead.
 
 export interface ProcessResult {
   mappingSuggestion?: Record<string, string | null>
@@ -93,8 +102,7 @@ async function processPdf(importId: string, buffer: Buffer): Promise<ProcessResu
     mappedData: r.mappedData,
     confidenceScores: { ...(r.confidenceScores as unknown as Record<string, unknown>) },
   }))
-  const staticEnriched = enrichFromStaticDataset(enrichableRows)
-  const enriched = await enrichFromClaude(staticEnriched)
+  const enriched = await runEnrichment(enrichableRows, { layer: 'pre-review' })
 
   await prisma.importRow.createMany({
     data: enriched.map((row) => {
@@ -181,8 +189,7 @@ async function processImage(importId: string, file: File, isInvoice = false): Pr
       mappedData: r.mappedData,
       confidenceScores: { ...(r.confidenceScores as unknown as Record<string, unknown>) },
     }))
-    const staticEnrichedHtml = enrichFromStaticDataset(enrichableHtmlRows)
-    const enrichedHtml = await enrichFromClaude(staticEnrichedHtml)
+    const enrichedHtml = await runEnrichment(enrichableHtmlRows, { layer: 'pre-review' })
 
     await prisma.importRow.createMany({
       data: enrichedHtml.map((row) => {
@@ -236,8 +243,14 @@ async function processImage(importId: string, file: File, isInvoice = false): Pr
     return {}
   }
 
+  const enrichableImageRows: EnrichableRow[] = extracted.map((r) => ({
+    mappedData: r.mappedData,
+    confidenceScores: { ...(r.confidenceScores as unknown as Record<string, unknown>) },
+  }))
+  const enrichedImageRows = await runEnrichment(enrichableImageRows, { layer: 'pre-review' })
+
   await prisma.importRow.createMany({
-    data: extracted.map((row) => {
+    data: enrichedImageRows.map((row) => {
       const mappedData = cleanMappedData(row.mappedData)
       return {
         importId,
@@ -250,7 +263,7 @@ async function processImage(importId: string, file: File, isInvoice = false): Pr
 
   await prisma.import.update({
     where: { id: importId },
-    data: { status: 'REVIEW', recordCount: extracted.length },
+    data: { status: 'REVIEW', recordCount: enrichedImageRows.length },
   })
 
   return {}

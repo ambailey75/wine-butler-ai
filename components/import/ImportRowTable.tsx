@@ -31,20 +31,23 @@ import {
   type ConfidenceScores,
   type MappedWineData,
 } from '@/lib/import/constants'
-import type { DuplicateMatch } from '@/lib/import/duplicate-detector'
+import type { MergeOutcome } from '@/lib/import/find-merge-match'
 import type { ImportRow } from '@prisma/client'
 
 export interface ImportRowWithDuplicate extends ImportRow {
-  duplicateOf: DuplicateMatch | null
+  mergeOutcome: MergeOutcome
   enrichedSources?: Record<string, string>
 }
+
+type LocationDecision = 'merge' | 'separate'
 
 interface RowState {
   id: string
   mappedData: MappedWineData
   confidenceScores: ConfidenceScores
   status: ImportRowStatus
-  duplicateOf: DuplicateMatch | null
+  mergeOutcome: MergeOutcome
+  locationDecision: LocationDecision
   markConsumed: boolean
   enrichedSources: Record<string, string>
 }
@@ -55,7 +58,10 @@ function toRowState(row: ImportRowWithDuplicate, defaultConsumed: boolean): RowS
     mappedData: (row.mappedData ?? {}) as unknown as MappedWineData,
     confidenceScores: (row.confidenceScores ?? {}) as unknown as ConfidenceScores,
     status: row.status,
-    duplicateOf: row.duplicateOf,
+    mergeOutcome: row.mergeOutcome,
+    // Safe default — a wine only merges into an existing blank-location
+    // record when the user explicitly opts in.
+    locationDecision: 'separate',
     markConsumed: defaultConsumed,
     enrichedSources: row.enrichedSources ?? {},
   }
@@ -69,6 +75,7 @@ interface ImportRowTableProps {
 
 interface ConfirmResult {
   imported: number
+  merged: number
   skipped: number
   fallback: number
   failed: number
@@ -155,10 +162,16 @@ export function ImportRowTable({ importId, rows, isHistoricalImport }: ImportRow
 
     try {
       const consumedRowIds = rowsState.filter((r) => r.markConsumed && r.status !== 'SKIPPED').map((r) => r.id)
+      const locationDecisions: Record<string, LocationDecision> = {}
+      for (const row of rowsState) {
+        if (row.mergeOutcome.type === 'needs-decision') {
+          locationDecisions[row.id] = row.locationDecision
+        }
+      }
       const res = await fetch(`/api/import/${importId}/confirm`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ consumedRowIds }),
+        body: JSON.stringify({ consumedRowIds, locationDecisions }),
       })
 
       if (res.headers.get('content-type')?.includes('application/json')) {
@@ -196,6 +209,7 @@ export function ImportRowTable({ importId, rows, isHistoricalImport }: ImportRow
                 setProgress(null)
                 setResult({
                   imported: msg.imported ?? 0,
+                  merged: msg.merged ?? 0,
                   skipped: msg.skipped ?? 0,
                   fallback: msg.fallback ?? 0,
                   failed: msg.failed ?? 0,
@@ -230,7 +244,7 @@ export function ImportRowTable({ importId, rows, isHistoricalImport }: ImportRow
         <h2 className="font-serif text-lg font-semibold text-foreground">Review your wines</h2>
         <p className="text-sm text-muted-foreground">
           Edit any fields that need correcting. Amber fields had low extraction confidence — please
-          verify them.{!isHistoricalImport && ' Possible duplicates are flagged below — review before confirming.'}
+          verify them.{!isHistoricalImport && ' Wines already in your cellar are flagged to merge below — review before confirming.'}
         </p>
       </div>
 
@@ -320,10 +334,54 @@ export function ImportRowTable({ importId, rows, isHistoricalImport }: ImportRow
                   </TableCell>
                 )}
                 <TableCell>
-                  {row.duplicateOf ? (
-                    <Badge variant="secondary" className="whitespace-nowrap">
-                      Possible duplicate of {row.duplicateOf.label}
-                    </Badge>
+                  {row.mergeOutcome.type === 'merge' ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Badge className="whitespace-nowrap border-transparent bg-[#C9A84C]/20 text-[#8a6d1f] hover:bg-[#C9A84C]/20 dark:bg-[#C9A84C]/20 dark:text-[#e0c274]">
+                          Merge with {row.mergeOutcome.label}
+                        </Badge>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        Quantity will be added to your existing bottle; blank fields will be filled
+                        in — nothing overwritten.
+                      </TooltipContent>
+                    </Tooltip>
+                  ) : row.mergeOutcome.type === 'needs-decision' ? (
+                    <div className="flex flex-col gap-1">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Badge
+                            variant="outline"
+                            className="w-fit whitespace-nowrap border-amber-400 text-amber-700 dark:border-amber-700 dark:text-amber-300"
+                          >
+                            Needs decision
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {row.mergeOutcome.label} exists in your cellar without a storage location.
+                        </TooltipContent>
+                      </Tooltip>
+                      <Select
+                        value={row.locationDecision}
+                        onValueChange={(value) =>
+                          setRowsState((prev) =>
+                            prev.map((r) =>
+                              r.id === row.id ? { ...r, locationDecision: value as LocationDecision } : r
+                            )
+                          )
+                        }
+                      >
+                        <SelectTrigger className="h-7 w-[190px] text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="merge">
+                            Merge, set location to {row.mergeOutcome.importedLocation}
+                          </SelectItem>
+                          <SelectItem value="separate">Keep as separate records</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   ) : (
                     <span className="text-xs text-muted-foreground">New</span>
                   )}
@@ -333,7 +391,17 @@ export function ImportRowTable({ importId, rows, isHistoricalImport }: ImportRow
                   const confidence = row.confidenceScores[field.key]
                   const lowConfidence = confidence !== undefined && confidence < LOW_CONFIDENCE_THRESHOLD
                   const enrichSource = row.enrichedSources[field.key]
-                  const badgeLabel = enrichSource === 'static' ? 'Matched' : enrichSource === 'ai-suggested' ? 'AI suggested' : null
+                  const badgeLabel =
+                    enrichSource === 'static' ? 'Matched'
+                    : enrichSource === 'ai-suggested' ? 'AI suggested'
+                    : enrichSource === 'vivino' ? 'Vivino score'
+                    : enrichSource === 'ai-estimate' ? 'AI estimate — verify before trusting'
+                    : null
+                  const isStrongWarning = enrichSource === 'ai-estimate'
+                  const isVerifiedSource = enrichSource === 'static' || enrichSource === 'vivino'
+                  const badgeTooltip = isStrongWarning
+                    ? 'No verified rating source found — this is Claude\'s best estimate. Verify before trusting.'
+                    : 'Auto-filled from wine knowledge — verify before confirming'
 
                   const input = (
                     <Input
@@ -363,14 +431,16 @@ export function ImportRowTable({ importId, rows, isHistoricalImport }: ImportRow
                             <TooltipTrigger asChild>
                               <span className={cn(
                                 'inline-flex w-fit cursor-default items-center rounded-sm px-1 py-0.5 text-[10px] font-medium leading-none',
-                                enrichSource === 'static'
+                                isVerifiedSource
                                   ? 'bg-primary/10 text-primary'
-                                  : 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'
+                                  : isStrongWarning
+                                    ? 'border border-amber-500 bg-amber-100 text-amber-800 dark:border-amber-600 dark:bg-amber-950/50 dark:text-amber-200'
+                                    : 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'
                               )}>
                                 {badgeLabel}
                               </span>
                             </TooltipTrigger>
-                            <TooltipContent>Auto-filled from wine knowledge — verify before confirming</TooltipContent>
+                            <TooltipContent>{badgeTooltip}</TooltipContent>
                           </Tooltip>
                         </div>
                       ) : inputWithTooltip}
@@ -388,7 +458,7 @@ export function ImportRowTable({ importId, rows, isHistoricalImport }: ImportRow
       {result && (
         <div className="space-y-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
           <p className="font-medium">
-            Import finished — {result.imported} imported, {result.skipped} skipped,{' '}
+            Import finished — {result.imported} imported{result.merged > 0 ? ` (${result.merged} merged into existing wines)` : ''}, {result.skipped} skipped,{' '}
             {result.failed} could not be imported.
           </p>
           {result.fallback > 0 && (

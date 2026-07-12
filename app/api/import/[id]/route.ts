@@ -4,7 +4,7 @@ import { getCurrentUser } from '@/lib/auth/current-user'
 import { prisma } from '@/lib/prisma/client'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getImport } from '@/lib/import/queries'
-import { findDuplicates } from '@/lib/import/duplicate-detector'
+import { findMergeMatches } from '@/lib/import/find-merge-match'
 import { IMPORTS_BUCKET, type MappedWineData } from '@/lib/import/constants'
 
 interface RouteParams {
@@ -25,7 +25,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
   const candidates = importRecord.rows.map(
     (row) => (row.mappedData ?? {}) as unknown as MappedWineData
   )
-  const duplicates = await findDuplicates(user.id, candidates)
+  const mergeOutcomes = await findMergeMatches(user.id, candidates)
 
   const rows = importRecord.rows.map((row, index) => {
     const scores = (row.confidenceScores ?? {}) as Record<string, unknown>
@@ -38,7 +38,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
         enrichedSources[field] = val
       }
     }
-    return { ...row, duplicateOf: duplicates[index], enrichedFields, enrichedSources }
+    return { ...row, mergeOutcome: mergeOutcomes[index], enrichedFields, enrichedSources }
   })
 
   return NextResponse.json({ ...importRecord, rows })

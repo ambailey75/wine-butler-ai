@@ -14,9 +14,12 @@ interface ImportReviewProps {
   regionSplitColumns?: Record<string, string>
   countryStateSplitColumns?: Record<string, string>
   isHistoricalImport?: boolean
+  showMergeBanner?: boolean
+  mergeMatchCount?: number
+  totalRowCount?: number
 }
 
-export function ImportReview({ importRecord, rows, mappingSuggestion, regionSplitColumns, countryStateSplitColumns, isHistoricalImport }: ImportReviewProps) {
+export function ImportReview({ importRecord, rows, mappingSuggestion, regionSplitColumns, countryStateSplitColumns, isHistoricalImport, showMergeBanner, mergeMatchCount, totalRowCount }: ImportReviewProps) {
   if (importRecord.status === 'FAILED') {
     return (
       <div className="flex items-start gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-4">
@@ -87,6 +90,17 @@ export function ImportReview({ importRecord, rows, mappingSuggestion, regionSpli
     </div>
   ) : null
 
+  const mergeBanner = showMergeBanner ? (
+    <div className="flex items-start gap-3 rounded-md border border-amber-300 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/30">
+      <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+      <p className="text-sm text-amber-900 dark:text-amber-200">
+        This looks like a duplicate import — {mergeMatchCount} of {totalRowCount} wines already
+        exist in your cellar. We&apos;ll combine quantities and fill in missing data rather than
+        creating duplicates.
+      </p>
+    </div>
+  ) : null
+
   if (importRecord.importType === 'MATCH_CONSUMED') {
     return (
       <div className="space-y-4">
@@ -101,6 +115,7 @@ export function ImportReview({ importRecord, rows, mappingSuggestion, regionSpli
     <div className="space-y-4">
       <ResetMappingButton importId={importRecord.id} />
       {errorBanner}
+      {mergeBanner}
       <ImportRowTable importId={importRecord.id} rows={rows} isHistoricalImport={isHistoricalImport} />
     </div>
   )

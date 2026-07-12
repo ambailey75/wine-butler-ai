@@ -2,11 +2,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import Fuse from 'fuse.js'
 import type { MappedWineData } from './constants'
-
-const ENRICHABLE_FIELDS = [
-  'country', 'state', 'region', 'subRegion', 'varietal',
-  'style', 'drinkWindowStart', 'drinkWindowEnd', 'classification', 'vineyard',
-] as const
+import { ENRICHABLE_FIELDS, type EnrichableField } from './enrichable-fields'
 
 interface StaticEntry {
   producer?: string
@@ -49,7 +45,10 @@ export type EnrichableRow = {
   confidenceScores: Record<string, unknown>
 }
 
-export function enrichFromStaticDataset(rows: EnrichableRow[]): EnrichableRow[] {
+export function enrichFromStaticDataset(
+  rows: EnrichableRow[],
+  fields: readonly EnrichableField[] = ENRICHABLE_FIELDS
+): EnrichableRow[] {
   const fuse = getStaticFuse()
 
   return rows.map(({ mappedData, confidenceScores }) => {
@@ -67,7 +66,7 @@ export function enrichFromStaticDataset(rows: EnrichableRow[]): EnrichableRow[] 
     const newData = { ...mappedData }
     const newScores: Record<string, unknown> = { ...confidenceScores }
 
-    for (const field of ENRICHABLE_FIELDS) {
+    for (const field of fields) {
       if (mappedData[field as keyof MappedWineData]) continue
       const matchVal = match[field as keyof StaticEntry]
       if (!matchVal) continue
