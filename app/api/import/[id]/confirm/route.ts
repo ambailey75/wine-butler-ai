@@ -10,7 +10,7 @@ import { runEnrichment } from '@/lib/import/run-enrichment'
 import { CONFIRM_ENRICHABLE_FIELDS } from '@/lib/import/enrichable-fields'
 import { findMergeMatches, type MergeOutcome, type ExistingWineSnapshot } from '@/lib/import/find-merge-match'
 import type { EnrichableRow } from '@/lib/import/enrich-from-static'
-import { normalizeWineData } from '@/lib/wines/normalize'
+import { normalizeWineData, looksLikeStateOrProvince } from '@/lib/wines/normalize'
 
 // ENRICHMENT REQUIREMENT: this route is Layer 2 (pre-confirm safety net) —
 // every row must be run through normalizeWineData() and runEnrichment()
@@ -101,9 +101,10 @@ function toWineCreateData(mapped: MappedWineData) {
     wineName: mapped.wineName?.trim() || 'Unknown Wine',
     vintage: mapped.vintage ?? null,
     country: mapped.country ?? null,
-    state: mapped.state ?? null,
+    state: mapped.state && looksLikeStateOrProvince(mapped.state) ? mapped.state : null,
     region: mapped.region ?? null,
     subRegion: mapped.subRegion ?? null,
+    appellation: mapped.appellation ?? null,
     vineyard: mapped.vineyard ?? null,
     classification: mapped.classification ?? null,
     varietal: mapped.varietal ?? null,

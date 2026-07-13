@@ -7,6 +7,7 @@ import {
   APPELLATION_LOOKUP,
   QUALITY_TIER_LOOKUP,
   AMBIGUOUS_SUBREGIONS,
+  COUNTRY_STATE_PAIRS,
 } from './region-data'
 
 // Single source of truth for all wine data normalization — used at import
@@ -119,6 +120,26 @@ function looksLikeAppellation(value: string): boolean {
   return KNOWN_PLACE_NAMES.has(trimmed.toLowerCase())
 }
 
+// Flattened set of valid US states, Australian states, and Canadian
+// provinces (lowercase) — used to keep a wine region/subregion/appellation
+// value from bleeding into the state field.
+const VALID_STATES_PROVINCES: Set<string> = new Set(
+  ['united states', 'usa', 'us', 'australia', 'canada'].flatMap(
+    (country) => COUNTRY_STATE_PAIRS[country] ?? []
+  )
+)
+
+/**
+ * True only for a genuine US state, Australian state, or Canadian
+ * province — not a wine region, sub-region, or appellation name that
+ * happens to have landed in the state field.
+ */
+export function looksLikeStateOrProvince(value: string): boolean {
+  const trimmed = value.trim()
+  if (!trimmed) return false
+  return VALID_STATES_PROVINCES.has(trimmed.toLowerCase())
+}
+
 /**
  * Region -> sub-region (or region-level "") appellation lookup chain.
  * Covers all three population scenarios with one code path: an exact
@@ -162,10 +183,16 @@ export function normalizeRegionAndSubRegion(
   let region = (rawRegion ?? '').trim()
   let subRegion = (rawSubRegion ?? '').trim()
 
-  if (!subRegion && region) {
-    const split = splitCombinedValue(region)
-    if (split) {
-      region = split.first
+  // Always clean region if it still holds a combined "Region > SubRegion"
+  // value — this can happen even when subRegion is already populated
+  // separately (e.g. an import's column-split feature writes a clean
+  // subRegion from a raw combined column but leaves the raw combined string
+  // in region itself). subRegion is only backfilled from the split when it
+  // wasn't already provided — an existing subRegion value is never touched.
+  const split = splitCombinedValue(region)
+  if (split) {
+    region = split.first
+    if (!subRegion) {
       subRegion = split.second
     }
   }
