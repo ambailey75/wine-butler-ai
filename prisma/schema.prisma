@@ -1,11 +1,17 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  // pg_stat_statements, pgcrypto, supabase_vault, uuid-ossp are enabled by
+  // Supabase automatically on every project, not by a Prisma migration —
+  // declared here so Prisma recognizes they already exist instead of
+  // reporting them as schema drift. pg_trgm is the one this project added.
+  extensions = [pg_trgm, pg_stat_statements, pgcrypto, supabase_vault(schema: "vault"), uuid_ossp(map: "uuid-ossp")]
 }
 
 model User {
@@ -16,57 +22,57 @@ model User {
   preferences Json     @default("{}")
   createdAt   DateTime @default(now())
 
-  wines            Wine[]
-  alerts           CellarAlert[]
-  conversations    AiConversation[]
-  imports          Import[]
-  consumptionLogs  ConsumptionLog[]
-  tastingNotes     TastingNote[]
-  watchListItems   WatchListItem[]
+  wines           Wine[]
+  alerts          CellarAlert[]
+  conversations   AiConversation[]
+  imports         Import[]
+  consumptionLogs ConsumptionLog[]
+  tastingNotes    TastingNote[]
+  watchListItems  WatchListItem[]
 
   @@map("users")
 }
 
 model Wine {
-  id              String    @id @default(cuid())
-  userId          String
-  producer        String
-  wineName        String
-  vintage         Int?
-  country         String?
-  state           String?
-  region          String?
-  subRegion       String?
-  appellation     String?
-  vineyard        String?
-  classification  String?
-  varietal        String?
-  format          String?
-  style           String?
-  quantity        Int       @default(1)
-  purchasePrice   Decimal?  @db.Decimal(10, 2)
-  purchaseDate    DateTime?
-  vendor          String?
-  storageLocation String?
-  notes           String?
-  tastingNotes    String?
-  pairingNotes    String?
-  rating          Decimal?  @db.Decimal(4, 1)
-  drinkWindowStart Int?
-  drinkWindowEnd   Int?
-  currentEstValue  Decimal?  @db.Decimal(10, 2)
-  totalCostOverride  Decimal? @db.Decimal(10, 2)
-  totalValueOverride Decimal? @db.Decimal(10, 2)
-  consumedQuantity Int       @default(0)
-  isFullyConsumed  Boolean   @default(false)
-  wineId          String?
-  labelPhotoUrl   String?
-  importId        String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                 String    @id @default(cuid())
+  userId             String
+  producer           String
+  wineName           String
+  vintage            Int?
+  country            String?
+  state              String?
+  region             String?
+  subRegion          String?
+  appellation        String?
+  vineyard           String?
+  classification     String?
+  varietal           String?
+  format             String?
+  style              String?
+  quantity           Int       @default(1)
+  purchasePrice      Decimal?  @db.Decimal(10, 2)
+  purchaseDate       DateTime?
+  vendor             String?
+  storageLocation    String?
+  notes              String?
+  tastingNotes       String?
+  pairingNotes       String?
+  rating             Decimal?  @db.Decimal(4, 1)
+  drinkWindowStart   Int?
+  drinkWindowEnd     Int?
+  currentEstValue    Decimal?  @db.Decimal(10, 2)
+  totalCostOverride  Decimal?  @db.Decimal(10, 2)
+  totalValueOverride Decimal?  @db.Decimal(10, 2)
+  consumedQuantity   Int       @default(0)
+  isFullyConsumed    Boolean   @default(false)
+  wineId             String?
+  labelPhotoUrl      String?
+  importId           String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
-  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  import          Import?           @relation(fields: [importId], references: [id])
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  import          Import?          @relation(fields: [importId], references: [id])
   enrichment      WineEnrichment?
   alerts          CellarAlert[]
   importRows      ImportRow[]
@@ -78,15 +84,15 @@ model Wine {
 }
 
 model ConsumptionLog {
-  id           String    @id @default(cuid())
+  id           String   @id @default(cuid())
   wineId       String
   userId       String
-  quantity     Int       @default(1)
-  consumedDate DateTime  @default(now())
+  quantity     Int      @default(1)
+  consumedDate DateTime @default(now())
   occasion     String?
   notes        String?
-  rating       Decimal?  @db.Decimal(4, 1)
-  createdAt    DateTime  @default(now())
+  rating       Decimal? @db.Decimal(4, 1)
+  createdAt    DateTime @default(now())
 
   wine Wine @relation(fields: [wineId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -123,7 +129,7 @@ model CellarAlert {
   dismissedAt DateTime?
   createdAt   DateTime  @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
   wine Wine? @relation(fields: [wineId], references: [id], onDelete: Cascade)
 
   @@index([userId])
@@ -166,20 +172,20 @@ enum ImportType {
 }
 
 model Import {
-  id               String           @id @default(cuid())
-  userId           String
-  sourceType       ImportSourceType
-  originalFilename String
-  storagePath      String
-  status           ImportStatus     @default(PENDING)
-  recordCount      Int              @default(0)
-  skippedCount     Int              @default(0)
-  errorMessage          String?
-  importType            ImportType       @default(NEW_INVENTORY)
-  isHistoricalImport    Boolean          @default(false)
+  id                     String           @id @default(cuid())
+  userId                 String
+  sourceType             ImportSourceType
+  originalFilename       String
+  storagePath            String
+  status                 ImportStatus     @default(PENDING)
+  recordCount            Int              @default(0)
+  skippedCount           Int              @default(0)
+  errorMessage           String?
+  importType             ImportType       @default(NEW_INVENTORY)
+  isHistoricalImport     Boolean          @default(false)
   historicalConsumedDate DateTime?
-  createdAt             DateTime         @default(now())
-  completedAt           DateTime?
+  createdAt              DateTime         @default(now())
+  completedAt            DateTime?
 
   user  User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   wines Wine[]
@@ -206,7 +212,7 @@ model ImportRow {
   reviewNotes      String?
 
   import Import @relation(fields: [importId], references: [id], onDelete: Cascade)
-  wine   Wine?   @relation(fields: [wineId], references: [id])
+  wine   Wine?  @relation(fields: [wineId], references: [id])
 
   @@index([importId])
   @@index([wineId])
@@ -214,23 +220,125 @@ model ImportRow {
 }
 
 model TastingNote {
-  id         String    @id @default(cuid())
+  id         String   @id @default(cuid())
   userId     String
   producer   String
   wineName   String
   vintage    Int?
-  rating     Decimal?  @db.Decimal(4, 1)
+  rating     Decimal? @db.Decimal(4, 1)
   liked      Boolean?
   notes      String?
   occasion   String?
   photoUrl   String?
-  tastedDate DateTime  @default(now())
-  createdAt  DateTime  @default(now())
+  tastedDate DateTime @default(now())
+  createdAt  DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("tasting_notes")
+}
+
+// Shared wine catalog — NOT per-user data. See PHASE2_READINESS.md for the
+// full design (dedup matching, privacy allow-list, trust-tier resolution,
+// search indexing). Deliberately carries zero relations to User, Import,
+// ImportRow, or Wine, and zero fields describing a person's private cellar
+// (price, storage location, notes, vendor) — see the privacy design doc
+// before adding any field here.
+enum SourceTrust {
+  X_WINES // primary anchor, CC0-licensed catalog import
+  LWIN // reserved — not populated until LWIN is licensed (deferred, see plan doc)
+  USER_CONFIRMED // written back from a real user's confirmed cellar import
+  LEGACY_MANUAL // the hand-curated 539-wine wine-data.json — real curated
+  // data, but unverified against a licensed source, so it
+  // ranks below X_WINES/LWIN and above AI_ESTIMATE
+  VIVINO // live lookup fallback, matches today's enrichment behavior
+  AI_ESTIMATE // lowest trust — an AI guess with nothing to check it against
+}
+
+model WineKnowledge {
+  id String @id @default(cuid())
+
+  // Core identity — what wine this is
+  producer String
+  wineName String
+  vintage  Int? // null = non-vintage (NV)
+
+  // Geography — a real hierarchy (country > state > region > subRegion >
+  // appellation), not independent facts. Kept as flat columns rather than a
+  // separate linked table: spelling/hierarchy consistency is already
+  // enforced upstream, at write time, by the same normalization logic used
+  // for dedup — a linked table would re-solve a problem that's already
+  // solved, at the cost of a join on every read. Revisit only if a real
+  // feature needs relational geography queries this doesn't support today.
+  country     String?
+  state       String?
+  region      String?
+  subRegion   String?
+  appellation String?
+
+  // Sparse, wine-specific detail — not geography, and typically unknown.
+  // Both fields are filled well under 30% of the time in practice; absence
+  // is the normal case, not a data-quality problem.
+  vineyard       String?
+  classification String?
+
+  // Varietal — deliberately separate from the two groups above. Unlike
+  // geography or vineyard/classification, this is not always a fixed fact:
+  // a producer can change a wine's blend composition over time. A
+  // vintage-dated wine's blend change is naturally captured as a new
+  // vintage (its own row here) — the real edge case is a non-vintage (NV)
+  // wine, which has no vintage year to split by, so its varietal can only
+  // ever reflect the most recently confirmed value, not a permanent fact.
+  // Known limitation, not solved by this schema — documented so it's never
+  // mistaken for a data-quality bug.
+  varietal String?
+
+  // Dedup fields — computed at write time (accent-folded, punctuation
+  // stripped, abbreviations expanded), never shown to a user directly.
+  // See PHASE2_READINESS.md "Dedup matching" for the matching logic that
+  // populates and uses these.
+  normalizedProducer String
+  normalizedWineName String
+  searchText         String // normalizedProducer + ' ' + normalizedWineName, for search only
+
+  // Source-trust — real enum column (not a JSON blob) so conflict
+  // resolution can filter/sort at scale. Same-tier conflicts resolve by
+  // fill-blanks-only, never overwrite (see PHASE2_READINESS.md).
+  sourceTrust SourceTrust
+
+  // Source-specific identifiers — separate nullable columns per source,
+  // since each source's ID namespace is only unique within itself.
+  xWinesId        String? @unique
+  lwinCode        String? @unique // populated once LWIN is licensed
+  lwinStatus      String?
+  lwinDisplayName String?
+
+  // Rating — one precomputed aggregate only. Never individual rating rows
+  // (X-Wines' 21M ratings are deliberately not imported — see plan doc).
+  avgRating   Decimal? @db.Decimal(3, 2)
+  ratingCount Int?
+
+  // Wine-Searcher pricing placeholder — populated once that license is
+  // pursued (bundled decision with LWIN, deferred).
+  wineSearcherPrice Decimal? @db.Decimal(10, 2)
+
+  // Anonymous multi-confirmation counter — a plain count only, never a
+  // list of who confirmed it. See privacy design in PHASE2_READINESS.md.
+  confirmedCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Deliberately absent, on principle: userId, importId, wineId,
+  // purchasePrice, storageLocation, vendor, notes, tastingNotes,
+  // pairingNotes, or any per-contributor identifier.
+
+  @@index([normalizedProducer, normalizedWineName, vintage]) // dedup exact-key fast path
+  @@index([producer]) // B-tree, exact/prefix browse
+  @@index([sourceTrust]) // conflict-resolution queries
+  @@index([searchText(ops: raw("gin_trgm_ops"))], type: Gin) // fuzzy search
+  @@map("wine_knowledge")
 }
 
 model WatchListItem {
