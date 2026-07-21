@@ -7,6 +7,42 @@ Wine inventory tracker and AI sommelier for personal collectors.
 Domain: winebutleriq.com
 PRD: `C:\Users\amand\ClaudeWorkspace\Projects\OneOff\cellar-ai\CellarAI_PRD_v1.1.docx` (rename to WineButlerIQ_PRD_v1.1.docx when convenient)
 
+## Phase & completion rules (non-negotiable — added 2026-07-16 after a trust failure)
+
+A "Phase 1" of any multi-phase initiative may only be called that if the final goal genuinely cannot be built without it — a true, load-bearing prerequisite. If a proposed step does not block or unlock the final goal, it is NOT a phase of that initiative. It gets its own name and its own separate task, full stop. Never bundle a nice-to-have or a maintenance safeguard into the same phase numbering as the real objective — doing so implies a dependency that doesn't exist and misleads on progress.
+
+Before presenting any step as "Phase 1," "Phase 2," etc., or before marking one complete, state explicitly and out loud: does the final goal depend on this being done first? If the honest answer is no, say so before doing the work, not after being asked to justify it later.
+
+Nothing gets marked "complete" or "verified" without a reproducible artifact — a commit hash, real test output, an actual diff — attached at the time it's claimed. A sentence asserting something passed is not evidence. If the artifact doesn't exist or isn't reproducible anymore, the item is not complete, regardless of what a plan doc says.
+
+## Stop-short / verification-subagent rule (added 2026-07-20, strengthened same day after the first version still allowed a stale ending)
+
+Whenever a response is about to present something as done, verified, or blocked — before that message is sent, spawn a verification subagent to check it independently. The subagent's job has three parts, not two: (1) confirm the claimed artifact actually exists and is reproducible (file on disk, real query output, a diff — not a sentence asserting it), (2) check whether every path available to Claude itself was actually exhausted before anything got handed back to the user, and (3) check the response's actual ending against the two allowed forms below — a description of a planned next step, on its own, is a stale ending and fails this check even if the artifact and exhaustion checks pass.
+
+**A response may only end one of two ways:**
+- **Completed further action** — the next step was already executed in this same turn, with its own real result shown, not just proposed; or
+- **A named, specific approval request** — one exact action stated (what command, what file, what deploy, what irreversible or production-affecting step), with the reason it specifically requires the user rather than being something Claude could do unilaterally.
+
+"I'm going to do X next," "the next step is Y," or any other statement of intent that does not fall into one of those two forms is a stale ending and must be caught by the subagent before the message goes out. If Claude catches itself about to write a stale ending, the fix is to either go do the thing right then, or convert it into a real, specific approval ask — not to soften the language around the same stall.
+
+The subagent's report must say explicitly which of the two allowed endings the response achieves. If neither, the response is not finished — go back and do or ask, then re-verify.
+
+## Data-source review rule (added 2026-07-20 after a table redesign this caused)
+
+Before designing a database table meant to hold data from an external source, inspect that source's actual full column/field list first — every column, not a summary or a sample. Don't design the table's structure and then discover missing columns after the fact.
+
+What happened: the `wine_knowledge` table was designed and shipped before the X-Wines CSV was actually opened and read column-by-column. Once it was, six real fields it contains had nowhere to land — ABV, Body, Acidity, Harmonize (food pairing), Elaborate (blend composition), Website, and a wine type/style — plus a structural mismatch on how vintage is represented (X-Wines lists a wine's vintages as a range; the table assumed one specific vintage per row). All fixable, but each fix costs a second migration and review cycle that a five-minute look at the real file header would have avoided the first time.
+
+## Plan format requirement
+
+Before any steps are shown, every plan opens with a short, plain statement: exactly what this is doing, and why it belongs in this plan/initiative at all. No steps get presented without that statement first. Steps themselves are still required — this is additive, not a replacement.
+
+Plans get drafted using the `Plan` subagent (software-architect agent, built for step-by-step plans and dependency/trade-off analysis) before being presented — not written freehand. This is a standing requirement, always, not case-by-case.
+
+Every blocker or step, in every plan, gets three additional things stated explicitly, not left implied: how it actually resolves, whether the user needs to do something and exactly what, and whether Claude Code/PowerShell needs to do something and exactly what. No step gets listed without that breakdown.
+
+**Wine knowledge database initiative:** the reference-file reorg once labeled "Phase 1" was skipped 2026-07-16 — confirmed not a prerequisite for the real database, not worth the time, not committed. `lib/wines/wine-knowledge.ts` sits uncommitted/untracked in the working tree; `region-data.ts`/`varietal-data.ts` are gone from disk but recoverable from git's index (also uncommitted) if this work is ever picked back up. `normalize.ts`, `claude-extractor.ts`, and `normalize-cellar.ts` currently still import from `wine-knowledge.ts` in the working tree only — this has not been deployed. Its two unfinished items (deriving `constants.ts` dropdown lists from the hierarchy, free-text-preservation testing) plus the file rename go at the end of Phase 3 or become a separate standalone project, not this initiative's Phase 1. Full plan: `WINE_KNOWLEDGE_DATABASE_PLAN.md`. The real database (Supabase `wine_knowledge` table) has not started; prerequisites are being scoped.
+
 ## Paths
 - **Project root:** `C:\Users\amand\ClaudeWorkspace\Projects\OneOff\cellar-ai`
 - **Workspace root:** `C:\Users\amand\ClaudeWorkspace`
