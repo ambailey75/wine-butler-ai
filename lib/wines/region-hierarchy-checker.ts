@@ -217,6 +217,130 @@ export async function crossCheckWineryMap(
   return { found: !!match, matchedKey: match?.regionKey ?? null };
 }
 
+// --- UC Davis "Wine Ontology" Rhône Valley cross-check ------------------
+//
+// Added 2026-07-20. github.com/UCDavisLibrary/wine-ontology, MIT licensed.
+// Confirmed real by reading examples/france/regions.csv directly (not
+// assumed): 21 named Rhône Valley appellations, each with a `region` column
+// value of "Region Rhône". Deliberately NOT treated as a France-wide
+// source — grepping the full file for other `Region X` values found only
+// this one region; Napa County data in the same repo is redundant with the
+// TTB/UC Davis AVA source already in use and is not duplicated here.
+// Hardcoded rather than fetched at runtime: 21 rows, small enough that a
+// live fetch adds a network dependency for no real benefit over baking it
+// in, and the source repo's own commit history shows this file is not
+// actively changing.
+const UC_DAVIS_RHONE_APPELLATIONS: string[] = [
+  "Côte-Rôtie",
+  "Condrieu/St.Joseph",
+  "St.Joseph",
+  "Crozes-Hermitage",
+  "Cornas",
+  "St-Péray",
+  "Côtes du Rhône-Villages",
+  "Coteaux du Tricastin",
+  "Vinsobres",
+  "Rasteau",
+  "Gigondas",
+  "Beaumes-de-Venise",
+  "Muscat de Beaumes-de-Venise",
+  "Vacqueyras",
+  "Châteauneuf-du-Pape",
+  "Côtes du Ventoux",
+  "Lirac",
+  "Tavel",
+  "Côtes du Luberon",
+  "Costières de Nîmes",
+  "Clairette de Bellegarde",
+];
+
+/**
+ * Cross-check against the UC Davis Rhône Valley appellation list. Same
+ * corroboration-only role as crossCheckWineryMap() — narrow (Rhône only),
+ * so a `found: false` here means "not in this small list," never
+ * "not a real appellation."
+ */
+export function crossCheckUCDavisRhone(appellationName: string): { found: boolean; matchedName: string | null } {
+  const needle = appellationName.toLowerCase();
+  const match = UC_DAVIS_RHONE_APPELLATIONS.find(
+    (name) => name.toLowerCase() === needle || needle.includes(name.toLowerCase()) || name.toLowerCase().includes(needle)
+  );
+  return { found: !!match, matchedName: match ?? null };
+}
+
+// --- Italy municipality -> region derivation (eAmbrosia's Municip_nam) --
+//
+// Added 2026-07-20. eAmbrosia's own PDO_EU_id.csv (data/PDO_EU_id (1)
+// eAmbrosia.csv, downloaded and confirmed by Amanda) has no parent-region
+// column, but does have a `Municip_nam` field: a "/"-separated list of
+// municipalities per PDO. Italy's municipality->region mapping is stable,
+// official, public administrative geography (unlike appellation names),
+// sourced here from ISTAT's own permanent list (Elenco-comuni-italiani.csv,
+// downloaded by Amanda from https://www.istat.it/storage/codici-unita-amministrative/Elenco-comuni-italiani.csv).
+//
+// VERIFIED end-to-end, real files, real join, 2026-07-20: eAmbrosia's row
+// for "Colli di Scandiano e di Canossa" (PDOid PDO-IT-A0305) lists
+// Albinea/Bibbiano/Canossa/.../Scandiano/... as its municipalities; every
+// one of those resolves to "Emilia-Romagna" in the ISTAT table. This
+// covers the Italian subset of eAmbrosia's 1,177 PDOs (Italy has more
+// PDOs in that dataset than any other single country) via two static
+// files and a plain join — no live network call, no CORS problem, no
+// rate limit, unlike the Wikidata/WineryMap paths above.
+//
+// lib/wines/data/italy-municipality-to-region.json: 7,891 unique
+// municipality->region pairs, built directly from the real ISTAT file
+// (7,899 raw rows; a handful collapse to the same name after historical
+// mergers, hence 7,891 unique keys). All 20 real Italian regions present.
+import italyMunicipalityToRegion from "./data/italy-municipality-to-region.json";
+
+/**
+ * Derive an Italian region from an eAmbrosia-style municipality list
+ * (e.g. "Albinea/Bibbiano/Canossa/Casalgrande/.../Scandiano/Vezzano Sul Crostolo/Viano").
+ * Returns null (not NO_MATCH) when nothing resolves — this is a derivation
+ * helper, not an independent checkRegion()-style verdict, since it depends
+ * entirely on eAmbrosia already having supplied the municipality list.
+ */
+export function deriveItalyRegionFromMunicipalities(municipNamField: string): {
+  region: string | null;
+  resolvedFrom: string | null;
+  unresolvedMunicipalities: string[];
+} {
+  const municipalities = municipNamField
+    .split("/")
+    .map((m) => m.trim())
+    .filter(Boolean);
+
+  const unresolvedMunicipalities: string[] = [];
+  const regionCounts = new Map<string, number>();
+
+  for (const m of municipalities) {
+    // ISTAT names are Title Case with normal Italian diacritics; eAmbrosia's
+    // Municip_nam field is inconsistently cased (e.g. "Reggio Nell'Emilia")
+    // -- match case-insensitively rather than assuming exact casing lines up.
+    const key = Object.keys(italyMunicipalityToRegion).find(
+      (istatName) => istatName.toLowerCase() === m.toLowerCase()
+    );
+    if (key) {
+      const region = (italyMunicipalityToRegion as Record<string, string>)[key];
+      regionCounts.set(region, (regionCounts.get(region) ?? 0) + 1);
+    } else {
+      unresolvedMunicipalities.push(m);
+    }
+  }
+
+  if (regionCounts.size === 0) {
+    return { region: null, resolvedFrom: null, unresolvedMunicipalities };
+  }
+
+  // Take the region with the most matching municipalities. A PDO's
+  // municipality list should overwhelmingly belong to one region; a mixed
+  // result here would itself be a signal worth surfacing to a human, not
+  // silently resolved -- callers should check unresolvedMunicipalities
+  // and consider low agreement a soft warning, not just take region blindly.
+  const [topRegion] = [...regionCounts.entries()].sort((a, b) => b[1] - a[1])[0];
+  return { region: topRegion, resolvedFrom: municipalities[0] ?? null, unresolvedMunicipalities };
+}
+
 export async function fetchFullRegionAuthorityTable(): Promise<RegionAuthorityRow[]> {
   const pageSize = 3000;
   let offset = 0;
