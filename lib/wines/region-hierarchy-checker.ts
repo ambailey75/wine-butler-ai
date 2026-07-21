@@ -795,7 +795,11 @@ export function deriveItalianSubregionFromAppellation(pdoName: string): {
 }
 
 export async function fetchFullRegionAuthorityTable(): Promise<RegionAuthorityRow[]> {
-  const pageSize = 3000;
+  // Reduced from 3000 (added 2026-07-20): production run showed the fetch
+  // getting cut off with "terminated" after ~80s at page size 3000, most
+  // likely Wikidata's own server-side query timeout on a heavier query.
+  // Smaller pages trade more requests for each one being reliable.
+  const pageSize = 1000;
   let offset = 0;
   const all: RegionAuthorityRow[] = [];
 
