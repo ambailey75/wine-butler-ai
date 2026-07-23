@@ -851,3 +851,601 @@ export async function fetchFullRegionAuthorityTable(): Promise<RegionAuthorityRo
 
   return all.filter((r) => !isNoiseRow(r));
 }
+
+// ---------------------------------------------------------------------------
+// eAmbrosia PDO-name bridge (REGION_VALIDATION_PLAN.md, Step 3, added
+// 2026-07-21).
+//
+// deriveItalyRegionFromMunicipalities() and deriveEuRegionFromMunicipalities()
+// above both take an eAmbrosia Municip_nam string directly. Neither accepts
+// what X-Wines actually gives us: a RegionName value like "Colli di Scandiano
+// e di Canossa" -- an appellation name, not a municipality list. This bridge
+// closes that gap: fuzzy-match the X-Wines RegionName against eAmbrosia's own
+// PDOnam column for that country, then feed the matched row's Municip_nam
+// into the right derive function above.
+//
+// Reuses the same match code proven elsewhere (dedup-match's
+// similarityScore/cleanName), but NOT region-validate-import's
+// CORRECTION_MATCH_THRESHOLD (0.8) -- that constant was calibrated for a
+// different validator (the single-source region_authority check). This
+// bridge has its own two-band calibration (EAMBROSIA_MATCH_FLOOR = 0.75,
+// EAMBROSIA_AUTOCORRECT_FLOOR = 0.85 -- see below), built by actually
+// running the bridge against all 1,483 real distinct RegionName values in
+// eAmbrosia-covered countries and inspecting the borderline range by hand,
+// not by reusing 0.8 on the assumption it would still be right here.
+import { readFileSync } from "fs";
+import { join } from "path";
+import { similarityScore } from "./dedup-match";
+
+// Calibrated 2026-07-21 directly against real data, not assumed -- ran the
+// bridge against all 1,483 distinct (country, RegionName) values in
+// eAmbrosia-covered countries and inspected every value in the borderline
+// range by hand. Below 0.75, results are reliably unrelated names (e.g.
+// "Ilia" / "Jutland" scoring under 0.4). From 0.75-0.84, results are a real
+// mix: genuine wanted matches (Albinea Canali's real case, 0.839) alongside
+// genuine different-place near-misses ("Tarantino" vs "Trentino" 0.778,
+// "Pouilly-Fumé" vs "Pouilly-Fuissé" 0.786) -- not safe to auto-correct on,
+// safe to surface for human review. At 0.85 and above, spot-checked matches
+// were all clean, correct pairs. This intentionally supersedes
+// region-validate-import.ts's separate CORRECTION_MATCH_THRESHOLD (0.8),
+// which was calibrated for the single-source region_authority validator,
+// not this bridge -- the two are allowed to differ since they're
+// calibrated against different reference data.
+export const EAMBROSIA_MATCH_FLOOR = 0.75; // below this, treat as no match at all
+export const EAMBROSIA_AUTOCORRECT_FLOOR = 0.85; // at/above this, confident enough to auto-correct
+// Between EAMBROSIA_MATCH_FLOOR and EAMBROSIA_AUTOCORRECT_FLOOR: a real
+// candidate match exists, but not confidently enough to silently rewrite a
+// value -- surfaced as FLAGGED_CONFLICT for a human instead.
+
+export interface EambrosiaPdoRow {
+  countryCode: string; // eAmbrosia's own 2-letter code, e.g. "IT"
+  pdoName: string; // raw PDOnam field, kept whole for traceability/display
+  pdoNameVariants: string[]; // pdoName split on "/" -- see note below
+  municipNam: string;
+}
+
+// Fix added 2026-07-21, after checking real "no match" cases: eAmbrosia's
+// own PDOnam field bundles alternate spellings into one string joined by
+// "/" for some PDOs -- confirmed real examples: "Erbaluce di Caluso /
+// Caluso", "Jerez-Xérès-Sherry / Jerez / Xérès / Sherry", "Cataluña /
+// Catalunya" (122 of 1,177 total eAmbrosia PDOs, ~10%, formatted this way).
+// Municip_nam was already being split on "/" for exactly this reason;
+// PDOnam wasn't, which is why "Erbaluce di Caluso" (a real, exact-name
+// match for one of the two bundled variants) was only scoring 0.720
+// against the full bundled string instead of a clean 1.0. Splitting PDOnam
+// the same way Municip_nam already is fixes this without changing the
+// match algorithm itself.
+function splitPdoNameVariants(pdoName: string): string[] {
+  return pdoName
+    .split("/")
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+// Minimal RFC4180-style CSV line parser. eAmbrosia's Municip_nam field
+// contains real embedded commas inside quotes for some countries (confirmed
+// real case: Spain's "Adrada, La/Barraco/..."), so a naive split(",")
+// misaligns columns -- verified directly against the real file: field counts
+// per line range from 15 to 98 with 80 quote characters present overall, not
+// assumed safe to split naively. No CSV library is installed in this
+// project; this file's format is simple enough that a hand-rolled
+// quote-aware parser is safer than adding a dependency for one loader.
+function parseCsvLine(line: string): string[] {
+  const fields: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      fields.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  fields.push(current);
+  return fields;
+}
+
+let cachedEambrosiaRows: EambrosiaPdoRow[] | null = null;
+
+// Loads and caches data/PDO_EU_id (1) eAmbrosia.csv, keeping only the three
+// columns this bridge needs (Country, PDOnam, Municip_nam -- columns 0, 2, 13
+// of the real header: Country,PDOid,PDOnam,Registration,
+// Category_of_wine_product,Varieties_OIV,Varieties_Other,Maximum_yield_hl,
+// Maximum_yield_kg,Minimum_planting_density,Irrigation,Amendment,PDOinfo,
+// Municip_nam,begin_lifes). Cached at module level -- this is static
+// reference data, no reason to re-read and re-parse the file on every call.
+export function loadEambrosiaPdoRows(csvPath?: string): EambrosiaPdoRow[] {
+  if (cachedEambrosiaRows) return cachedEambrosiaRows;
+  const path = csvPath ?? join(process.cwd(), "data", "PDO_EU_id (1) eAmbrosia.csv");
+  const raw = readFileSync(path, "utf-8").replace(/^﻿/, "");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  const rows: EambrosiaPdoRow[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    // skip header row (i=0)
+    const fields = parseCsvLine(lines[i]);
+    const countryCode = fields[0]?.trim();
+    const pdoName = fields[2]?.trim();
+    const municipNam = fields[13]?.trim();
+    if (!countryCode || !pdoName || !municipNam) continue;
+    rows.push({ countryCode, pdoName, pdoNameVariants: splitPdoNameVariants(pdoName), municipNam });
+  }
+  cachedEambrosiaRows = rows;
+  return rows;
+}
+
+export interface EambrosiaBridgeResult {
+  region: string | null;
+  matchedPdoName: string | null;
+  similarity: number;
+  resolvedFrom: string | null;
+  unresolvedMunicipalities: string[];
+}
+
+// Maps eAmbrosia's 2-letter country code to the literal country-name union
+// deriveEuRegionFromMunicipalities() expects. Only countries that function
+// actually supports are listed here -- anything else falls through to "no
+// hierarchy layer" in deriveRegionFromEambrosia() below rather than a guess.
+const EAMBROSIA_CODE_TO_EU_COUNTRY: Record<
+  string,
+  Parameters<typeof deriveEuRegionFromMunicipalities>[0]
+> = {
+  FR: "France",
+  ES: "Spain",
+  PT: "Portugal",
+  DE: "Germany",
+  AT: "Austria",
+  EL: "Greece", // eAmbrosia uses ISO "EL" for Greece, not "GR"
+  GR: "Greece",
+  HR: "Croatia",
+  UK: "United Kingdom",
+  GB: "United Kingdom",
+  BG: "Bulgaria",
+  RO: "Romania",
+  HU: "Hungary",
+  SI: "Slovenia",
+  CZ: "Czech Republic",
+  SK: "Slovakia",
+  BE: "Belgium",
+  CY: "Cyprus",
+  NL: "Netherlands",
+  MT: "Malta",
+  DK: "Denmark",
+  LU: "Luxembourg",
+};
+
+// Added 2026-07-21, Step 5: lets callers outside this file (the import
+// pipeline) know whether it's even worth trying the eAmbrosia bridge for a
+// given country before calling deriveRegionFromEambrosia -- Italy is
+// handled by its own dedicated municipality deriver above, not through the
+// EAMBROSIA_CODE_TO_EU_COUNTRY map, so it's included explicitly here.
+export function isEambrosiaCoveredCountry(countryCode: string): boolean {
+  return countryCode === "IT" || countryCode in EAMBROSIA_CODE_TO_EU_COUNTRY;
+}
+
+// Classification/quality-tier qualifiers that describe a sub-zone or
+// production standard *within* an appellation, not the place itself --
+// added 2026-07-21 after checking real near-miss cases directly. "Villages"
+// is the clearest example: it marks a village-level sub-designation (like
+// calling something "the township of X"), not a distinct location, so a
+// source value with "Villages" attached (e.g. "Côtes-du-Rhône-Villages")
+// shouldn't be penalized against the plain parent name in eAmbrosia. Same
+// idea for French "Grand Cru"/"Premier Cru" (quality-classification tiers,
+// not places) and Italian "Classico"/"Riserva"/"Superiore" (sub-zone or
+// aging/quality tiers). Confirmed real, current usage directly against
+// eAmbrosia's own PDOnam column before adding each term (not guessed):
+// Villages/Village 6, Grand Cru 54, Classico 4, Riserva 5, Superiore 7,
+// Premier Cru/1er Cru 0 (kept anyway -- same category, just not yet used in
+// this exact file). Stripped from BOTH the source text and eAmbrosia's own
+// name before scoring, so the comparison stays symmetric -- this is
+// deliberately a short, curated list built from real cases, not a general
+// grammar rule, and it only affects which text gets compared, never which
+// municipality list gets used once a row is matched.
+const MATCH_NOISE_QUALIFIERS = [
+  "1er Cru",
+  "Premier Cru",
+  "Grand Cru",
+  "Villages",
+  "Village",
+  "Classico",
+  "Riserva",
+  "Superiore",
+];
+
+function stripMatchNoiseQualifiers(name: string): string {
+  let result = name;
+  for (const term of MATCH_NOISE_QUALIFIERS) {
+    result = result.replace(new RegExp(`\\b${term}\\b`, "gi"), " ");
+  }
+  return result.replace(/\s+/g, " ").trim();
+}
+
+// Pure function of (countryCode, regionNameFromSource) -- memoized because
+// checkProducerGroupConsistency calls this once per distinct RegionName
+// value in every disagreeing producer group, and the same real values
+// (e.g. "Bourgogne", "Willamette Valley") recur across many unrelated
+// producers in a real full-catalog run. Added 2026-07-21 after timing the
+// real, full 100,645-row catalog: 6,862 disagreeing (WineryID, Country)
+// groups, a handful of which are large negociants/retailers with 30-63
+// distinct RegionName values each (confirmed real cases: several French
+// producers with 25-63 distinct values), made the uncached version take
+// roughly 80s end-to-end -- correct, not a hang, just real repeated work
+// worth not redoing.
+const eambrosiaBridgeCache = new Map<string, EambrosiaBridgeResult>();
+
+// Fuzzy-matches an X-Wines RegionName value against eAmbrosia's real PDOnam
+// list for one country, then feeds the matched row's Municip_nam into the
+// existing Italy or EU municipality-to-region deriver above. Returns a null
+// region (not a guess) whenever nothing clears EAMBROSIA_MATCH_FLOOR, or
+// when a PDO match exists but no municipality-to-region table covers that
+// country yet. Callers needing the flag/auto-correct distinction should
+// compare the returned similarity against EAMBROSIA_AUTOCORRECT_FLOOR
+// themselves (see checkProducerGroupConsistency below).
+export function deriveRegionFromEambrosia(
+  countryCode: string,
+  regionNameFromSource: string
+): EambrosiaBridgeResult {
+  const cacheKey = `${countryCode}::${regionNameFromSource}`;
+  const cached = eambrosiaBridgeCache.get(cacheKey);
+  if (cached) return cached;
+
+  const result = deriveRegionFromEambrosiaUncached(countryCode, regionNameFromSource);
+  eambrosiaBridgeCache.set(cacheKey, result);
+  return result;
+}
+
+function deriveRegionFromEambrosiaUncached(
+  countryCode: string,
+  regionNameFromSource: string
+): EambrosiaBridgeResult {
+  const rows = loadEambrosiaPdoRows().filter((r) => r.countryCode === countryCode);
+  if (rows.length === 0) {
+    return {
+      region: null,
+      matchedPdoName: null,
+      similarity: 0,
+      resolvedFrom: null,
+      unresolvedMunicipalities: [],
+    };
+  }
+
+  const cleanedSource = stripMatchNoiseQualifiers(regionNameFromSource);
+
+  let best: { row: EambrosiaPdoRow; score: number } | null = null;
+  for (const row of rows) {
+    // Score against every bundled name variant (see splitPdoNameVariants
+    // above), not just the raw combined PDOnam string -- takes the best of
+    // e.g. ["Erbaluce di Caluso", "Caluso"] rather than scoring against
+    // "Erbaluce di Caluso / Caluso" as one literal string.
+    const variants = row.pdoNameVariants.length > 0 ? row.pdoNameVariants : [row.pdoName];
+    for (const variant of variants) {
+      const cleanedVariant = stripMatchNoiseQualifiers(variant);
+      const score = similarityScore(cleanedSource, cleanedVariant);
+      if (!best || score > best.score) {
+        best = { row, score };
+      }
+    }
+  }
+
+  if (!best || best.score < EAMBROSIA_MATCH_FLOOR) {
+    return {
+      region: null,
+      matchedPdoName: best?.row.pdoName ?? null,
+      similarity: best?.score ?? 0,
+      resolvedFrom: null,
+      unresolvedMunicipalities: [],
+    };
+  }
+
+  if (countryCode === "IT") {
+    const derived = deriveItalyRegionFromMunicipalities(best.row.municipNam);
+    return {
+      region: derived.region,
+      matchedPdoName: best.row.pdoName,
+      similarity: best.score,
+      resolvedFrom: derived.resolvedFrom,
+      unresolvedMunicipalities: derived.unresolvedMunicipalities,
+    };
+  }
+
+  const euCountry = EAMBROSIA_CODE_TO_EU_COUNTRY[countryCode];
+  if (euCountry) {
+    const derived = deriveEuRegionFromMunicipalities(euCountry, best.row.municipNam);
+    return {
+      region: derived.region,
+      matchedPdoName: best.row.pdoName,
+      similarity: best.score,
+      resolvedFrom: derived.resolvedFrom,
+      unresolvedMunicipalities: derived.unresolvedMunicipalities,
+    };
+  }
+
+  // Real PDO identity found (best.row.pdoName), but no municipality-to-region
+  // table exists for this country in either derive function -- honestly
+  // unresolved, not guessed.
+  return {
+    region: null,
+    matchedPdoName: best.row.pdoName,
+    similarity: best.score,
+    resolvedFrom: null,
+    unresolvedMunicipalities: [],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Producer-group consistency check (REGION_VALIDATION_PLAN.md, Step 4,
+// Signals B/C, added 2026-07-21).
+//
+// Design settled through direct testing against real cases this session,
+// not assumed up front:
+//
+// - Ken Wright Cellars (real case: Willamette Valley Pinot Noir + Celilo
+//   Vineyard Chardonnay from White Salmon, Washington) proved that
+//   hierarchy-relatedness can't be the gate for flagging a disagreement --
+//   Washington and Willamette Valley aren't parent/child at all, yet the
+//   disagreement is completely legitimate (two real wines, two real
+//   places). A design that flags "unrelated" values would have wrongly
+//   flagged this real producer.
+// - Albinea Canali (real case: 5 of 6 rows "Piemonte", 1 row the correct
+//   "Colli de Scandiano e Canosa" / Emilia-Romagna) proved the opposite
+//   failure mode: two values can look shaped like a legitimate multi-region
+//   split (a small minority disagreeing with a majority) while actually
+//   being a real data error, not a real second place.
+//
+// What actually tells these apart isn't the *shape* of the disagreement, or
+// whether the two values are geographically related -- it's whether an
+// independent anchor (the eAmbrosia bridge above) specifically resolves a
+// minority value to a real place that contradicts the majority's claim.
+// Absent that anchor, a disagreement is left alone no matter how unrelated
+// the values look, because Ken Wright proves unrelated-but-legitimate is a
+// real, common pattern (New World wines and non-appellation-controlled
+// European wines can source grapes/fruit outside a fixed home region --
+// this is the norm for a meaningful share of the catalog, not an edge
+// case). Only eAmbrosia-covered countries have an anchor source at all;
+// everything else (all New World countries, including the US) has no
+// anchor and is therefore left untouched by construction, not by a special
+// case -- confirmed against real data: 1,913 of 6,862 disagreeing producer
+// groups are in a country with no anchor source at all (1,077 of those in
+// the US alone), and all of them fall through to NO_ANCHOR below.
+//
+// A "clear majority" (defined here as one value accounting for a strict
+// majority, >50%, of a group's rows) is required before attempting
+// anything at all -- groups without one (roughly even splits across 2+
+// values) look structurally like genuine multi-region producers
+// (confirmed real cases: Quinta da Barreira/Douro+Lisboa,
+// Lionel Osmin & Cie/many Southwest France appellations) and are left
+// alone regardless of anchor results, matching the plan's own framing:
+// producer-group consistency detects that a conflict exists, it never
+// picks a winner by vote.
+
+export type RegionNameGroupStatus =
+  | "NO_DISAGREEMENT" // group has only one distinct RegionName value
+  | "NO_CLEAR_MAJORITY" // disagreement exists but no single value is a strict majority -- presumed multi-region producer, left alone
+  | "MAJORITY_UNANCHORED" // a clear majority exists, but it doesn't itself confidently resolve to a real place -- no trustworthy ground truth to judge minority values against, left alone
+  | "NO_ANCHOR" // majority confidently anchors, but no minority value has an anchor that contradicts it -- left alone
+  | "CORRECTED" // a minority value was confidently (>=0.85) anchored to a region that contradicts the majority's own confidently-anchored region
+  | "FLAGGED_CONFLICT"; // a minority value has a real but uncertain (0.75-0.84) anchor contradicting the majority's confidently-anchored region
+
+export interface RegionNameGroupDecision {
+  regionName: string;
+  rowCount: number;
+  isMajority: boolean;
+  status: "CONFIRMED" | "CORRECTED" | "FLAGGED_CONFLICT" | "UNVALIDATED";
+  correctedRegion: string | null; // set only when status === "CORRECTED"
+  validationSource: string | null; // e.g. "EAMBROSIA_BRIDGE"
+  flagReason: string | null; // set only when status === "FLAGGED_CONFLICT"
+  matchedPdoName: string | null;
+  similarity: number | null;
+}
+
+export interface ProducerGroupConsistencyResult {
+  groupStatus: RegionNameGroupStatus;
+  decisions: RegionNameGroupDecision[];
+}
+
+// regionNameCounts: distinct RegionName -> row count, for one (WineryID,
+// Country) group. Only worth calling when regionNameCounts.size > 1 --
+// callers should treat a single-value group as NO_DISAGREEMENT upstream
+// without needing to call this at all, though it's handled safely here too.
+export function checkProducerGroupConsistency(
+  countryCode: string,
+  regionNameCounts: Map<string, number>
+): ProducerGroupConsistencyResult {
+  const entries = [...regionNameCounts.entries()];
+
+  if (entries.length <= 1) {
+    return {
+      groupStatus: "NO_DISAGREEMENT",
+      decisions: entries.map(([regionName, rowCount]) => ({
+        regionName,
+        rowCount,
+        isMajority: true,
+        status: "UNVALIDATED",
+        correctedRegion: null,
+        validationSource: null,
+        flagReason: null,
+        matchedPdoName: null,
+        similarity: null,
+      })),
+    };
+  }
+
+  const totalRows = entries.reduce((sum, [, count]) => sum + count, 0);
+  const [majorityRegionName, majorityCount] = entries.reduce((a, b) => (b[1] > a[1] ? b : a));
+  const hasClearMajority = majorityCount > totalRows / 2;
+
+  if (!hasClearMajority) {
+    // Shaped like a genuine multi-region producer (real confirmed cases:
+    // Quinta da Barreira, Lionel Osmin & Cie) -- not attempting anything,
+    // regardless of what any anchor might say.
+    return {
+      groupStatus: "NO_CLEAR_MAJORITY",
+      decisions: entries.map(([regionName, rowCount]) => ({
+        regionName,
+        rowCount,
+        isMajority: false,
+        status: "UNVALIDATED",
+        correctedRegion: null,
+        validationSource: null,
+        flagReason: null,
+        matchedPdoName: null,
+        similarity: null,
+      })),
+    };
+  }
+
+  // Require the majority itself to confidently self-anchor before treating
+  // it as ground truth to judge minority values against -- added 2026-07-21
+  // after two real false positives surfaced by running this against the
+  // actual regression set, not caught by reasoning alone:
+  //   - Fayolle Fils & Fille: majority "Northern Rhône" is an informal
+  //     umbrella term with no eAmbrosia PDO entry at all (no anchor), so
+  //     the real, correct minority value "Crozes-Hermitage" was wrongly
+  //     "corrected" away from it.
+  //   - Terra d'Alter: majority "Alentejano" (a broad Vinho Regional tier)
+  //     only scores 0.800 against eAmbrosia's "Alentejo" PDO -- itself
+  //     inside the flag band, not confident -- so the real, valid, more
+  //     specific minority value "Alentejo" was wrongly "corrected" to
+  //     "Alentejo Central" relative to an unconfident majority.
+  // If the majority doesn't confidently resolve, there's no trustworthy
+  // anchor to correct or flag anything against -- the whole group is left
+  // alone, same caution as an unanchored minority value gets.
+  const majorityAnchor = deriveRegionFromEambrosia(countryCode, majorityRegionName);
+  const majorityConfident = majorityAnchor.region !== null && majorityAnchor.similarity >= EAMBROSIA_AUTOCORRECT_FLOOR;
+
+  if (!majorityConfident) {
+    return {
+      groupStatus: "MAJORITY_UNANCHORED",
+      decisions: entries.map(([regionName, rowCount]) => ({
+        regionName,
+        rowCount,
+        isMajority: regionName === majorityRegionName,
+        status: "UNVALIDATED",
+        correctedRegion: null,
+        validationSource: null,
+        flagReason: null,
+        matchedPdoName: regionName === majorityRegionName ? majorityAnchor.matchedPdoName : null,
+        similarity: regionName === majorityRegionName ? majorityAnchor.similarity : null,
+      })),
+    };
+  }
+
+  const decisions: RegionNameGroupDecision[] = [];
+  let anyCorrected = false;
+  let anyFlagged = false;
+
+  for (const [regionName, rowCount] of entries) {
+    const isMajority = regionName === majorityRegionName;
+    if (isMajority) {
+      decisions.push({
+        regionName,
+        rowCount,
+        isMajority: true,
+        status: "CONFIRMED",
+        correctedRegion: null,
+        validationSource: "EAMBROSIA_BRIDGE",
+        flagReason: null,
+        matchedPdoName: majorityAnchor.matchedPdoName,
+        similarity: majorityAnchor.similarity,
+      });
+      continue;
+    }
+
+    const anchor = deriveRegionFromEambrosia(countryCode, regionName);
+
+    if (!anchor.region) {
+      // No anchor at all for this minority value -- Ken Wright's Celilo
+      // Vineyard Chardonnay is exactly this shape for a non-eAmbrosia
+      // country; the same caution applies here even within eAmbrosia's
+      // scope (e.g. a real minority appellation eAmbrosia simply doesn't
+      // resolve to a region for). Left alone, not guessed at.
+      decisions.push({
+        regionName,
+        rowCount,
+        isMajority: false,
+        status: "UNVALIDATED",
+        correctedRegion: null,
+        validationSource: null,
+        flagReason: null,
+        matchedPdoName: anchor.matchedPdoName,
+        similarity: anchor.similarity,
+      });
+      continue;
+    }
+
+    if (anchor.region === majorityAnchor.region) {
+      // Anchor confirms the minority value actually agrees with the
+      // majority's own resolved region once resolved (e.g. a spelling
+      // variant, or a more specific name within the same real place) --
+      // not a real conflict at all.
+      decisions.push({
+        regionName,
+        rowCount,
+        isMajority: false,
+        status: "CONFIRMED",
+        correctedRegion: null,
+        validationSource: "EAMBROSIA_BRIDGE",
+        flagReason: null,
+        matchedPdoName: anchor.matchedPdoName,
+        similarity: anchor.similarity,
+      });
+      continue;
+    }
+
+    // Anchor found, and it contradicts the majority's own confidently
+    // anchored region -- a real conflict. Confidence
+    // (EAMBROSIA_AUTOCORRECT_FLOOR) decides whether to silently correct or
+    // surface for human review; see that constant's comment for how 0.85
+    // was calibrated against real data.
+    if (anchor.similarity >= EAMBROSIA_AUTOCORRECT_FLOOR) {
+      anyCorrected = true;
+      decisions.push({
+        regionName,
+        rowCount,
+        isMajority: false,
+        status: "CORRECTED",
+        correctedRegion: anchor.region,
+        validationSource: "EAMBROSIA_BRIDGE",
+        flagReason: null,
+        matchedPdoName: anchor.matchedPdoName,
+        similarity: anchor.similarity,
+      });
+    } else {
+      anyFlagged = true;
+      decisions.push({
+        regionName,
+        rowCount,
+        isMajority: false,
+        status: "FLAGGED_CONFLICT",
+        correctedRegion: null,
+        validationSource: "EAMBROSIA_BRIDGE",
+        flagReason:
+          `eAmbrosia bridge matched "${regionName}" to "${anchor.matchedPdoName}" ` +
+          `(similarity ${anchor.similarity.toFixed(3)}), deriving region "${anchor.region}", ` +
+          `which contradicts the group's majority claim of "${majorityRegionName}" ` +
+          `(itself anchored to "${majorityAnchor.region}" at ${majorityAnchor.similarity.toFixed(3)}). ` +
+          `Below the ${EAMBROSIA_AUTOCORRECT_FLOOR} auto-correct floor -- needs human review, not auto-corrected.`,
+        matchedPdoName: anchor.matchedPdoName,
+        similarity: anchor.similarity,
+      });
+    }
+  }
+
+  const groupStatus: RegionNameGroupStatus = anyCorrected ? "CORRECTED" : anyFlagged ? "FLAGGED_CONFLICT" : "NO_ANCHOR";
+
+  return { groupStatus, decisions };
+}

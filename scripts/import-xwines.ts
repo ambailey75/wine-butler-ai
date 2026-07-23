@@ -8,9 +8,17 @@
 // - Prosecco-style NV collapsing handled generically (see mergeDuplicateNameGroups)
 // - never guess a future vintage year — stores exactly what X-Wines lists, nothing added
 //
-// Region validation against region_authority is NOT yet wired in — flagged
-// explicitly, not silently skipped. See the run summary's "unvalidatedRegionRows"
-// count. That's the next piece, not done here.
+// Region validation (REGION_VALIDATION_PLAN.md Step 5) runs in two passes:
+// Pass 1 validates every row on its own against an external reference
+// (eAmbrosia PDO bridge for EU-PDO-covered countries, region_authority
+// fallback everywhere else). Pass 2 groups rows by (WineryID, Country) and
+// re-checks internal RegionName disagreement using Step 4's producer-group
+// consistency check, which can catch real errors Pass 1 alone can't (e.g.
+// Albinea Canali: "Piemonte" is a real, validly-anchored region on its own,
+// but wrong for this specific Emilia-Romagna producer -- only visible once
+// compared against this producer's other rows). Pass 2 only escalates a
+// row's status (CONFIRMED/UNVALIDATED -> CORRECTED/FLAGGED_CONFLICT); it
+// never overrides a row Pass 1 already corrected or flagged directly.
 //
 // Uses relative imports (not @/lib/...) so this runs standalone via
 // ts-node outside Next's bundler — same pattern as the other scripts here.
@@ -18,6 +26,8 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { prisma } from '../lib/prisma/client'
 import { cleanName } from '../lib/wines/dedup-match'
+import { buildRegionAuthorityIndex, validateRegionBaseline } from '../lib/wines/region-validate-import'
+import { checkProducerGroupConsistency, RegionNameGroupDecision } from '../lib/wines/region-hierarchy-checker'
 
 const CSV_PATH = join(__dirname, '..', 'data-imports', 'XWines_100K_wines.csv')
 const INSERT_BATCH_SIZE = 500
@@ -144,10 +154,16 @@ interface TransformResult {
     searchText: string
     xWinesId: string
   }
+  regionValidation: 'CONFIRMED' | 'CORRECTED' | 'FLAGGED_CONFLICT' | 'UNVALIDATED'
+  regionValidationSource: 'EAMBROSIA_BRIDGE' | 'REGION_AUTHORITY' | 'PRODUCER_GROUP_CONSISTENCY' | null
+  regionFlagReason: string | null
+  originalRegion: string | null
   skippedReason?: string
 }
 
-function transformRow(row: XWinesRow): TransformResult | null {
+type RegionAuthorityIndex = ReturnType<typeof buildRegionAuthorityIndex>
+
+function transformRow(row: XWinesRow, regionIndex: RegionAuthorityIndex): TransformResult | null {
   if (SKIP_WINE_IDS.has(row.WineID)) {
     return null // real, confirmed-wrong duplicate — not imported, not flagged as an error
   }
@@ -159,12 +175,14 @@ function transformRow(row: XWinesRow): TransformResult | null {
   const normalizedProducer = cleanName(row.WineryName)
   const normalizedWineName = cleanName(row.WineName)
 
+  const regionResult = validateRegionBaseline(regionIndex, row.Code || null, row.Country || null, row.RegionName || null)
+
   return {
     record: {
       producer: row.WineryName,
       wineName: row.WineName,
       country: row.Country || null,
-      region: row.RegionName || null, // NOT YET region-validated — see file header
+      region: regionResult.validatedRegion,
       varietal: grapes.length > 0 ? grapes.join(', ') : null,
       type_style: row.Type || null,
       abv: row.ABV ? parseFloat(row.ABV) : null,
@@ -180,6 +198,10 @@ function transformRow(row: XWinesRow): TransformResult | null {
       searchText: `${normalizedProducer} ${normalizedWineName}`,
       xWinesId: row.WineID,
     },
+    regionValidation: regionResult.status,
+    regionValidationSource: regionResult.validationSource,
+    regionFlagReason: regionResult.flagReason,
+    originalRegion: row.RegionName || null,
   }
 }
 
@@ -187,24 +209,129 @@ async function main() {
   const dryRun = process.argv.includes('--dry-run')
   const startedAt = Date.now()
 
+  console.log('Loading region_authority for region validation...')
+  const authorityRows = await prisma.regionAuthority.findMany({
+    where: { source: 'WIKIDATA' },
+    select: { appellation: true, locatedIn: true, country: true },
+  })
+  console.log(`Loaded ${authorityRows.length} region_authority rows`)
+  const regionIndex = buildRegionAuthorityIndex(authorityRows)
+
   console.log(`Reading ${CSV_PATH}...`)
   const text = readFileSync(CSV_PATH, 'utf-8')
   const rawRows = parseCsv(text)
   console.log(`Parsed ${rawRows.length} raw rows`)
 
-  const records: TransformResult['record'][] = []
+  // Pass 1: per-row baseline (Signal A). Skips confirmed-wrong duplicates
+  // before either pass so they never enter producer-group counts either.
+  const pass1: Array<{ row: XWinesRow; result: TransformResult }> = []
   let skipped = 0
   for (const row of rawRows) {
-    const result = transformRow(row)
+    const result = transformRow(row, regionIndex)
     if (!result) {
       skipped++
       continue
     }
-    records.push(result.record)
+    pass1.push({ row, result })
+  }
+  console.log(`Pass 1 (per-row baseline) complete: ${pass1.length} rows transformed (${skipped} skipped — confirmed-wrong duplicates)`)
+
+  // Pass 2: producer-group consistency (Signals B/C, Step 4). Group by
+  // (WineryID, Country) -- Country, not Code, matches how a "producer" is
+  // scoped for this check (same producer name could in principle repeat
+  // across countries; keeping Country in the key avoids conflating those).
+  const groups = new Map<string, { countryCode: string; regionNameCounts: Map<string, number> }>()
+  for (const { row } of pass1) {
+    if (!row.WineryID || !row.Country || !row.RegionName) continue
+    const key = `${row.WineryID}::${row.Country}`
+    let group = groups.get(key)
+    if (!group) {
+      group = { countryCode: row.Code || '', regionNameCounts: new Map() }
+      groups.set(key, group)
+    }
+    group.regionNameCounts.set(row.RegionName, (group.regionNameCounts.get(row.RegionName) ?? 0) + 1)
   }
 
-  console.log(`Transformed ${records.length} rows (${skipped} skipped — confirmed-wrong duplicates)`)
-  console.log(`unvalidatedRegionRows: ${records.length} — region field is raw X-Wines text, NOT yet checked against region_authority. Flagged, not silently skipped.`)
+  // Only groups with real internal disagreement (>1 distinct RegionName)
+  // are worth checking -- checkProducerGroupConsistency handles a
+  // single-value group safely too, but there's no reason to spend the call.
+  const groupDecisions = new Map<string, Map<string, RegionNameGroupDecision>>()
+  let groupsWithDisagreement = 0
+  let groupsCorrected = 0
+  let groupsFlagged = 0
+  for (const [key, group] of groups) {
+    if (group.regionNameCounts.size <= 1) continue
+    groupsWithDisagreement++
+    const consistency = checkProducerGroupConsistency(group.countryCode, group.regionNameCounts)
+    if (consistency.groupStatus === 'CORRECTED') groupsCorrected++
+    if (consistency.groupStatus === 'FLAGGED_CONFLICT') groupsFlagged++
+    if (consistency.groupStatus === 'CORRECTED' || consistency.groupStatus === 'FLAGGED_CONFLICT') {
+      groupDecisions.set(key, new Map(consistency.decisions.map((d) => [d.regionName, d])))
+    }
+  }
+  console.log(
+    `Pass 2 (producer-group consistency): ${groupsWithDisagreement} producer groups had internal RegionName disagreement; ` +
+      `${groupsCorrected} groups produced a correction, ${groupsFlagged} groups produced a flag needing human review`
+  )
+
+  // Apply Pass 2 as an escalation only -- a row Pass 1 already corrected or
+  // flagged directly (against region_authority or the eAmbrosia bridge on
+  // its own) keeps that result; Pass 2 only upgrades a row Pass 1 called
+  // CONFIRMED or UNVALIDATED when the producer-group check independently
+  // caught something Pass 1 alone could not see.
+  let escalatedToCorrected = 0
+  let escalatedToFlagged = 0
+  for (const { row, result } of pass1) {
+    if (!row.WineryID || !row.Country || !row.RegionName) continue
+    if (result.regionValidation === 'CORRECTED' || result.regionValidation === 'FLAGGED_CONFLICT') continue
+
+    const key = `${row.WineryID}::${row.Country}`
+    const decision = groupDecisions.get(key)?.get(row.RegionName)
+    if (!decision) continue
+
+    if (decision.status === 'CORRECTED' && decision.correctedRegion) {
+      result.record.region = decision.correctedRegion
+      result.regionValidation = 'CORRECTED'
+      result.regionValidationSource = 'PRODUCER_GROUP_CONSISTENCY'
+      escalatedToCorrected++
+    } else if (decision.status === 'FLAGGED_CONFLICT') {
+      result.regionValidation = 'FLAGGED_CONFLICT'
+      result.regionValidationSource = 'PRODUCER_GROUP_CONSISTENCY'
+      result.regionFlagReason = decision.flagReason
+      escalatedToFlagged++
+    }
+  }
+  console.log(
+    `Pass 2 escalations: ${escalatedToCorrected} rows corrected, ${escalatedToFlagged} rows flagged for review ` +
+      `that Pass 1 alone had left confirmed/unvalidated`
+  )
+
+  const records = pass1.map((p) => p.result.record)
+  const confirmed = pass1.filter((p) => p.result.regionValidation === 'CONFIRMED').length
+  const corrected = pass1.filter((p) => p.result.regionValidation === 'CORRECTED')
+  const flagged = pass1.filter((p) => p.result.regionValidation === 'FLAGGED_CONFLICT')
+  const unvalidated = pass1.filter((p) => p.result.regionValidation === 'UNVALIDATED').length
+
+  console.log(
+    `Region validation final distribution: ${confirmed} confirmed, ${corrected.length} corrected, ` +
+      `${flagged.length} flagged for review, ${unvalidated} unvalidated`
+  )
+
+  if (corrected.length > 0) {
+    console.log('Sample of corrected rows:')
+    corrected.slice(0, 10).forEach(({ row, result }) =>
+      console.log(
+        `  - ${row.WineryName} / ${row.WineName}: "${result.originalRegion}" -> "${result.record.region}" (source: ${result.regionValidationSource})`
+      )
+    )
+  }
+
+  if (flagged.length > 0) {
+    console.log('Sample of flagged-for-review rows:')
+    flagged.slice(0, 10).forEach(({ row, result }) =>
+      console.log(`  - ${row.WineryName} / ${row.WineName}: "${result.originalRegion}" -- ${result.regionFlagReason}`)
+    )
+  }
 
   if (dryRun) {
     console.log('--dry-run: no database writes. Sample of first 3 transformed records:')
